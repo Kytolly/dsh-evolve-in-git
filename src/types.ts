@@ -1,0 +1,60 @@
+export type MemoryKind = 'session' | 'skill' | 'warning' | 'persona' | 'note'
+
+export interface MemoryRecordInput {
+  kind: MemoryKind
+  title: string
+  content: string
+  tags?: readonly string[]
+  source?: string
+  branch?: string
+}
+
+export interface MemoryRecord extends MemoryRecordInput {
+  createdAt: string
+  path: string
+}
+
+export interface SkillDraftInput {
+  name: string
+  description: string
+  whenToUse: string
+  instructions: string
+  tags?: readonly string[]
+}
+
+export interface SkillDraft extends SkillDraftInput {
+  path: string
+  content: string
+}
+
+export interface EvolutionSuggestion {
+  question: string
+  rationale: string
+  branchName: string
+  draft: SkillDraft
+}
+
+export interface CommittedArtifact {
+  path: string
+  branch: string
+  commit: string | undefined
+  message: string
+}
+
+export interface GitStatus {
+  branch: string
+  head: string | undefined
+  ahead: number
+  behind: number
+  clean: boolean
+  changedFiles: string[]
+}
+
+export interface ResolvedConfig {
+  repoPath: string
+  memoryRoot: string
+  skillsRoot: string
+  defaultBranch: string
+  remoteName: string
+  autoCommit: boolean
+}

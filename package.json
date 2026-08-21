@@ -1,0 +1,67 @@
+{
+  "name": "dsh-evolve-in-git",
+  "version": "0.1.0",
+  "description": "Git-backed long-term memory and evolution plugin for DeepSeek Harness",
+  "private": false,
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Kytolly/dsh-evolve-in-git.git"
+  },
+  "homepage": "https://github.com/Kytolly/dsh-evolve-in-git#readme",
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "git",
+    "memory",
+    "skills",
+    "plugin"
+  ],
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./git": {
+      "types": "./lib/types/git.d.ts",
+      "default": "./lib/git.js"
+    },
+    "./strategy": {
+      "types": "./lib/types/strategy.d.ts",
+      "default": "./lib/strategy.js"
+    },
+    "./invariant": {
+      "types": "./lib/types/invariant.d.ts",
+      "default": "./lib/invariant.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/git.js",
+    "lib/strategy.js",
+    "lib/invariant.js",
+    "lib/types/**/*.d.ts"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --import tsx/esm --test tests/**/*.spec.ts",
+    "check": "npm run build && npm run test"
+  },
+  "dependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/schemastery": "^3.18.1"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-invariants": "^0.0.1-rc.1"
+  },
+  "devDependencies": {
+    "@deepseek-ai/dsh-invariants": "^0.0.1-rc.1",
+    "@types/node": "^22.20.0",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3"
+  }
+}
