@@ -5,6 +5,8 @@
 
 import { Context, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import {
   checkoutBranch as gitCheckoutBranch,
   createBranch as gitCreateBranch,
@@ -13,6 +15,7 @@ import {
   fetchRemote,
   gitStatus,
   listBranches,
+  openRepository,
   pushBranch,
   writeMemoryRecord,
   writeSkillDraft,
@@ -20,6 +23,7 @@ import {
 import type {
   CommittedArtifact,
   EvolutionSuggestion,
+  GitAuthConfig,
   MemoryRecord,
   MemoryRecordInput,
   ResolvedConfig,
@@ -48,7 +52,9 @@ declare module '@deepseek-ai/cordis' {
 }
 
 export interface Config {
-  repoPath: string
+  repoPath?: string
+  repoUrl?: string
+  auth?: GitAuthConfig
   memoryRoot?: string
   skillsRoot?: string
   defaultBranch?: string
@@ -60,14 +66,21 @@ const DEFAULT_MEMORY_ROOT = '.dsh-evolve/memory'
 const DEFAULT_SKILLS_ROOT = '.dsh-evolve/skills'
 const DEFAULT_BRANCH = 'main'
 const DEFAULT_REMOTE = 'origin'
+const DEFAULT_REPO_URL = 'https://github.com/Kytolly/dsh-remote-memory.git'
+const DEFAULT_REPO_PATH = join(homedir(), '.dsh-evolve-in-git', 'remote-memory')
+const DEFAULT_AUTH = {
+  mode: 'ssh' as const,
+  sshCommand: 'ssh',
+  tokenEnv: 'GITHUB_TOKEN',
+  token: '',
+  username: 'x-access-token',
+}
 
 function resolveConfig(config: Config): ResolvedConfig {
-  const repoPath = config.repoPath.trim()
-  if (repoPath === '') {
-    throw new Error('repoPath must be a non-empty string')
-  }
   return {
-    repoPath,
+    repoPath: config.repoPath?.trim() || DEFAULT_REPO_PATH,
+    repoUrl: config.repoUrl?.trim() || DEFAULT_REPO_URL,
+    auth: config.auth ?? DEFAULT_AUTH,
     memoryRoot: config.memoryRoot?.trim() || DEFAULT_MEMORY_ROOT,
     skillsRoot: config.skillsRoot?.trim() || DEFAULT_SKILLS_ROOT,
     defaultBranch: config.defaultBranch?.trim() || DEFAULT_BRANCH,
@@ -81,7 +94,15 @@ function resolveConfig(config: Config): ResolvedConfig {
  */
 export class GitEvolutionService extends Service {
   static Config = z.object({
-    repoPath: z.string().required(),
+    repoPath: z.string().default(DEFAULT_REPO_PATH),
+    repoUrl: z.string().default(DEFAULT_REPO_URL),
+    auth: z.object({
+      mode: z.union([z.const('ssh'), z.const('token')]),
+      sshCommand: z.string(),
+      tokenEnv: z.string(),
+      token: z.string(),
+      username: z.string(),
+    }).default(DEFAULT_AUTH),
     memoryRoot: z.string().default(DEFAULT_MEMORY_ROOT),
     skillsRoot: z.string().default(DEFAULT_SKILLS_ROOT),
     defaultBranch: z.string().default(DEFAULT_BRANCH),
@@ -101,7 +122,7 @@ export class GitEvolutionService extends Service {
    * @returns the current branch, head, and working-tree summary.
    */
   async status() {
-    return gitStatus(ensureGitRepository(this.config.repoPath))
+    return gitStatus(openRepository(this.config))
   }
 
   /**
@@ -109,7 +130,7 @@ export class GitEvolutionService extends Service {
    * @returns the branch names.
    */
   async branches(): Promise<string[]> {
-    return listBranches(ensureGitRepository(this.config.repoPath))
+    return listBranches(openRepository(this.config))
   }
 
   /**
@@ -154,7 +175,7 @@ export class GitEvolutionService extends Service {
    * @param from - optional start point; defaults to the configured default branch.
    */
   async createBranch(branch: string, from?: string): Promise<void> {
-    gitCreateBranch(this.config.repoPath, branch, from ?? this.config.defaultBranch)
+    gitCreateBranch(openRepository(this.config), branch, from ?? this.config.defaultBranch)
   }
 
   /**
@@ -162,14 +183,15 @@ export class GitEvolutionService extends Service {
    * @param branch - branch name to check out.
    */
   async checkout(branch: string): Promise<void> {
-    gitCheckoutBranch(this.config.repoPath, branch)
+    gitCheckoutBranch(openRepository(this.config), branch)
   }
 
   /**
    * Fetch the configured remote.
    */
   async fetch(): Promise<void> {
-    fetchRemote(this.config.repoPath, this.config.remoteName)
+    const repoPath = openRepository(this.config)
+    fetchRemote(repoPath, this.config.remoteName, this.config.auth, this.config.repoUrl)
   }
 
   /**
@@ -177,7 +199,16 @@ export class GitEvolutionService extends Service {
    * @param branch - branch to push; defaults to the current branch.
    */
   async push(branch?: string): Promise<void> {
-    pushBranch(this.config.repoPath, branch ?? currentBranch(this.config.repoPath), this.config.remoteName)
+    const repoPath = openRepository(this.config)
+    pushBranch(repoPath, branch ?? currentBranch(repoPath), this.config.remoteName, this.config.auth, this.config.repoUrl)
+  }
+
+  /**
+   * Ensure the configured repository exists locally and is connected to the remote memory repo.
+   * @returns the Git status after connecting.
+   */
+  async connect() {
+    return gitStatus(openRepository(this.config))
   }
 }
 

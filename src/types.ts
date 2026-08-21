@@ -52,9 +52,19 @@ export interface GitStatus {
 
 export interface ResolvedConfig {
   repoPath: string
+  repoUrl: string
+  auth: GitAuthConfig
   memoryRoot: string
   skillsRoot: string
   defaultBranch: string
   remoteName: string
   autoCommit: boolean
+}
+
+export interface GitAuthConfig {
+  mode: 'ssh' | 'token'
+  sshCommand?: string
+  tokenEnv?: string
+  token?: string
+  username?: string
 }

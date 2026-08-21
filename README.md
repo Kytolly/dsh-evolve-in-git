@@ -9,12 +9,19 @@ It can write session notes, branch-specific records, and reusable skill drafts i
 
 ## Config
 
-- `repoPath` - the Git repository that stores memory and skills.
+- `repoPath` - the local Git checkout that stores memory and skills. Defaults to `~/.dsh-evolve-in-git/remote-memory`.
+- `repoUrl` - the remote memory repository. Defaults to `https://github.com/Kytolly/dsh-remote-memory.git`.
+- `auth` - optional Git auth settings for private access.
 - `memoryRoot` - where memory records are written, default `.dsh-evolve/memory`.
 - `skillsRoot` - where skill drafts are written, default `.dsh-evolve/skills`.
 - `defaultBranch` - branch to evolve from when creating new branches, default `main`.
 - `remoteName` - remote to fetch and push, default `origin`.
 - `autoCommit` - whether writes auto-commit, default `true`.
+
+### Auth
+
+- `auth.mode: "ssh"` - use `ssh` or a custom `sshCommand`.
+- `auth.mode: "token"` - use `token` or a token from `tokenEnv` and a GitHub-style `Authorization` header.
 
 ## Current API
 
@@ -25,6 +32,7 @@ It can write session notes, branch-specific records, and reusable skill drafts i
 - `suggest(...)` - return a user-facing skill-promotion prompt.
 - `saveSkillDraft(...)` - persist a generated skill draft.
 - `createBranch(...)`, `checkout(...)`, `fetch()`, `push()` - Git workflow helpers.
+- `connect()` - ensure the local checkout exists and is linked to the remote memory repo.
 
 ## Current slice
 

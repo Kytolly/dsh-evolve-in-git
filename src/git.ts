@@ -1,8 +1,8 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { dirname, join, resolve } from 'node:path'
-import type { CommittedArtifact, GitStatus, MemoryRecord, MemoryRecordInput, ResolvedConfig, SkillDraft, SkillDraftInput } from './types.js'
+import type { CommittedArtifact, GitAuthConfig, GitStatus, MemoryRecord, MemoryRecordInput, ResolvedConfig, SkillDraft, SkillDraftInput } from './types.js'
 import { renderSkillDraft, sanitizeSegment, slugify } from './strategy.js'
 
 export class GitEvolutionError extends Error {
@@ -15,8 +15,29 @@ export class GitEvolutionError extends Error {
   }
 }
 
-function runGit(repoPath: string, args: readonly string[]): string {
-  const result = spawnSync('git', ['-C', repoPath, ...args], { encoding: 'utf8' })
+function gitEnv(auth: GitAuthConfig | undefined, repoUrl: string): Record<string, string> {
+  if (auth === undefined) return {}
+  if (auth.mode === 'ssh') {
+    return {
+      GIT_SSH_COMMAND: auth.sshCommand ?? 'ssh',
+    }
+  }
+  const token = auth.token ?? process.env[auth.tokenEnv ?? 'GITHUB_TOKEN']
+  if (token === undefined || token.trim() === '') {
+    throw new GitEvolutionError('missing Git token for private repository access', 'GIT_AUTH_TOKEN_MISSING')
+  }
+  const username = auth.username ?? 'x-access-token'
+  const origin = new URL(repoUrl).origin
+  const header = `Authorization: Basic ${Buffer.from(`${username}:${token}`).toString('base64')}`
+  return {
+    [`GIT_CONFIG_COUNT`]: '1',
+    [`GIT_CONFIG_KEY_0`]: `http.${origin}/.extraheader`,
+    [`GIT_CONFIG_VALUE_0`]: header,
+  }
+}
+
+function runGit(repoPath: string, args: readonly string[], env: Record<string, string> = {}): string {
+  const result = spawnSync('git', ['-C', repoPath, ...args], { encoding: 'utf8', env: { ...process.env, ...env } })
   if (result.error !== undefined) {
     throw new GitEvolutionError(`git ${args.join(' ')} failed: ${result.error.message}`, 'GIT_SPAWN_FAILED', result.error)
   }
@@ -26,11 +47,37 @@ function runGit(repoPath: string, args: readonly string[]): string {
   return String(result.stdout ?? '').trim()
 }
 
+function cloneGit(repoUrl: string, repoPath: string, branch: string, auth?: GitAuthConfig): void {
+  const env = gitEnv(auth, repoUrl)
+  const result = spawnSync('git', ['clone', '--branch', branch, '--single-branch', repoUrl, repoPath], {
+    cwd: dirname(repoPath),
+    encoding: 'utf8',
+    env: { ...process.env, ...env },
+  })
+  if (result.error !== undefined) {
+    throw new GitEvolutionError(`git clone failed: ${result.error.message}`, 'GIT_SPAWN_FAILED', result.error)
+  }
+  if (result.status !== 0) {
+    throw new GitEvolutionError(result.stderr.trim() || 'git clone failed', 'GIT_COMMAND_FAILED')
+  }
+}
+
 export function ensureGitRepository(repoPath: string): string {
   const resolved = resolve(repoPath)
   if (!existsSync(join(resolved, '.git'))) {
     throw new GitEvolutionError(`not a git repository: ${resolved}`, 'GIT_REPOSITORY_MISSING')
   }
+  return resolved
+}
+
+export function openRepository(config: ResolvedConfig): string {
+  const resolved = resolve(config.repoPath)
+  if (existsSync(join(resolved, '.git'))) return resolved
+  if (existsSync(resolved) && readdirSync(resolved).length > 0) {
+    throw new GitEvolutionError(`repository path exists but is not a git checkout: ${resolved}`, 'GIT_REPOSITORY_DIRTY')
+  }
+  mkdirSync(dirname(resolved), { recursive: true })
+  cloneGit(config.repoUrl, resolved, config.defaultBranch, config.auth)
   return resolved
 }
 
@@ -59,12 +106,12 @@ export function createBranch(repoPath: string, branch: string, from?: string): v
   runGit(repoPath, args)
 }
 
-export function pushBranch(repoPath: string, branch: string, remote: string): void {
-  runGit(repoPath, ['push', remote, branch])
+export function pushBranch(repoPath: string, branch: string, remote: string, auth?: GitAuthConfig, repoUrl?: string): void {
+  runGit(repoPath, ['push', remote, branch], repoUrl === undefined ? {} : gitEnv(auth, repoUrl))
 }
 
-export function fetchRemote(repoPath: string, remote: string): void {
-  runGit(repoPath, ['fetch', remote])
+export function fetchRemote(repoPath: string, remote: string, auth?: GitAuthConfig, repoUrl?: string): void {
+  runGit(repoPath, ['fetch', remote], repoUrl === undefined ? {} : gitEnv(auth, repoUrl))
 }
 
 export function gitStatus(repoPath: string): GitStatus {
@@ -116,7 +163,7 @@ function commitPaths(repoPath: string, paths: readonly string[], message: string
 }
 
 export function writeMemoryRecord(config: ResolvedConfig, input: MemoryRecordInput): CommittedArtifact & MemoryRecord {
-  const repoPath = ensureGitRepository(config.repoPath)
+  const repoPath = openRepository(config)
   const createdAt = new Date().toISOString()
   const branch = input.branch ?? currentBranch(repoPath)
   const filePath = join(
@@ -157,7 +204,7 @@ export function writeMemoryRecord(config: ResolvedConfig, input: MemoryRecordInp
 }
 
 export function writeSkillDraft(config: ResolvedConfig, draft: SkillDraftInput): CommittedArtifact & SkillDraft {
-  const repoPath = ensureGitRepository(config.repoPath)
+  const repoPath = openRepository(config)
   const filePath = join(repoPath, config.skillsRoot, sanitizeSegment(draft.name), 'SKILL.md')
   mkdirSync(dirname(filePath), { recursive: true })
   const rendered = renderSkillDraft(draft)
