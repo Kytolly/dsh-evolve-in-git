@@ -70,6 +70,53 @@ export function ensureGitRepository(repoPath: string): string {
   return resolved
 }
 
+function canonicalRepoId(repoUrl: string): string {
+  const trimmed = repoUrl.trim()
+  if (trimmed.startsWith('git@')) {
+    const withoutPrefix = trimmed.slice('git@'.length)
+    const separator = withoutPrefix.indexOf(':')
+    if (separator === -1) return withoutPrefix.replace(/\.git$/i, '').toLowerCase()
+    const host = withoutPrefix.slice(0, separator).toLowerCase()
+    const path = withoutPrefix.slice(separator + 1).replace(/\.git$/i, '').replace(/^\/+/, '')
+    return `${host}/${path}`.toLowerCase()
+  }
+  try {
+    const parsed = new URL(trimmed)
+    const path = parsed.pathname.replace(/\.git$/i, '').replace(/^\/+/, '')
+    return `${parsed.host.toLowerCase()}/${path.toLowerCase()}`
+  } catch {
+    return trimmed.replace(/\.git$/i, '').replace(/^\/+/, '').toLowerCase()
+  }
+}
+
+export function remoteUrl(repoPath: string, remote: string): string {
+  const resolved = ensureGitRepository(repoPath)
+  try {
+    return runGit(resolved, ['remote', 'get-url', remote])
+  } catch (error) {
+    throw new GitEvolutionError(
+      `missing Git remote ${JSON.stringify(remote)} in ${resolved}`,
+      'GIT_REMOTE_MISSING',
+      error,
+    )
+  }
+}
+
+export function ensureRemoteMatches(repoPath: string, remote: string, repoUrl: string): string {
+  const actual = remoteUrl(repoPath, remote)
+  if (canonicalRepoId(actual) !== canonicalRepoId(repoUrl)) {
+    throw new GitEvolutionError(
+      `remote ${JSON.stringify(remote)} points to ${actual}, expected ${repoUrl}`,
+      'GIT_REMOTE_MISMATCH',
+    )
+  }
+  return actual
+}
+
+export function verifyRemoteAccess(repoPath: string, remote: string, repoUrl: string, auth: GitAuthConfig): void {
+  runGit(repoPath, ['ls-remote', '--exit-code', remote, 'HEAD'], gitEnv(auth, repoUrl))
+}
+
 export function openRepository(config: ResolvedConfig): string {
   const resolved = resolve(config.repoPath)
   if (existsSync(join(resolved, '.git'))) return resolved
@@ -112,6 +159,13 @@ export function pushBranch(repoPath: string, branch: string, remote: string, aut
 
 export function fetchRemote(repoPath: string, remote: string, auth?: GitAuthConfig, repoUrl?: string): void {
   runGit(repoPath, ['fetch', remote], repoUrl === undefined ? {} : gitEnv(auth, repoUrl))
+}
+
+export function connectRepository(config: ResolvedConfig): string {
+  const repoPath = openRepository(config)
+  ensureRemoteMatches(repoPath, config.remoteName, config.repoUrl)
+  verifyRemoteAccess(repoPath, config.remoteName, config.repoUrl, config.auth)
+  return repoPath
 }
 
 export function gitStatus(repoPath: string): GitStatus {

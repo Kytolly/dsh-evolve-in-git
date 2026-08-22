@@ -9,6 +9,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import {
   checkoutBranch as gitCheckoutBranch,
+  connectRepository,
   createBranch as gitCreateBranch,
   currentBranch,
   ensureGitRepository,
@@ -42,7 +43,17 @@ import {
 } from './strategy.js'
 
 export type * from './types.js'
-export { GitEvolutionError, checkoutBranch, createBranch, currentBranch, ensureGitRepository, fetchRemote, gitStatus, pushBranch } from './git.js'
+export {
+  GitEvolutionError,
+  checkoutBranch,
+  connectRepository,
+  createBranch,
+  currentBranch,
+  ensureGitRepository,
+  fetchRemote,
+  gitStatus,
+  pushBranch,
+} from './git.js'
 export { branchNameForRecord, draftSkillFromRecord, memoryPreview, renderSkillDraft, sanitizeSegment, shouldOfferSkillPromotion, slugify, suggestEvolution } from './strategy.js'
 
 declare module '@deepseek-ai/cordis' {
@@ -122,7 +133,7 @@ export class GitEvolutionService extends Service {
    * @returns the current branch, head, and working-tree summary.
    */
   async status() {
-    return gitStatus(openRepository(this.config))
+    return gitStatus(connectRepository(this.config))
   }
 
   /**
@@ -130,7 +141,7 @@ export class GitEvolutionService extends Service {
    * @returns the branch names.
    */
   async branches(): Promise<string[]> {
-    return listBranches(openRepository(this.config))
+    return listBranches(connectRepository(this.config))
   }
 
   /**
@@ -175,7 +186,7 @@ export class GitEvolutionService extends Service {
    * @param from - optional start point; defaults to the configured default branch.
    */
   async createBranch(branch: string, from?: string): Promise<void> {
-    gitCreateBranch(openRepository(this.config), branch, from ?? this.config.defaultBranch)
+    gitCreateBranch(connectRepository(this.config), branch, from ?? this.config.defaultBranch)
   }
 
   /**
@@ -183,14 +194,14 @@ export class GitEvolutionService extends Service {
    * @param branch - branch name to check out.
    */
   async checkout(branch: string): Promise<void> {
-    gitCheckoutBranch(openRepository(this.config), branch)
+    gitCheckoutBranch(connectRepository(this.config), branch)
   }
 
   /**
    * Fetch the configured remote.
    */
   async fetch(): Promise<void> {
-    const repoPath = openRepository(this.config)
+    const repoPath = connectRepository(this.config)
     fetchRemote(repoPath, this.config.remoteName, this.config.auth, this.config.repoUrl)
   }
 
@@ -199,7 +210,7 @@ export class GitEvolutionService extends Service {
    * @param branch - branch to push; defaults to the current branch.
    */
   async push(branch?: string): Promise<void> {
-    const repoPath = openRepository(this.config)
+    const repoPath = connectRepository(this.config)
     pushBranch(repoPath, branch ?? currentBranch(repoPath), this.config.remoteName, this.config.auth, this.config.repoUrl)
   }
 
@@ -208,7 +219,7 @@ export class GitEvolutionService extends Service {
    * @returns the Git status after connecting.
    */
   async connect() {
-    return gitStatus(openRepository(this.config))
+    return gitStatus(connectRepository(this.config))
   }
 }
 

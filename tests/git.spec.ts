@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import test from 'node:test'
-import { currentBranch, gitStatus, listBranches, writeMemoryRecord } from '../src/git.js'
+import { connectRepository, currentBranch, gitStatus, listBranches, writeMemoryRecord } from '../src/git.js'
 import { branchNameForRecord, draftSkillFromRecord, memoryPreview, renderSkillDraft, shouldOfferSkillPromotion, slugify, suggestEvolution } from '../src/strategy.js'
 
 function initRepo(): string {
@@ -16,6 +16,24 @@ function initRepo(): string {
   execFileSync('git', ['add', 'README.md'], { cwd: dir })
   execFileSync('git', ['commit', '-m', 'init'], { cwd: dir, stdio: 'pipe' })
   return dir
+}
+
+function initBareRemote(): { remote: string; clone: string } {
+  const base = mkdtempSync(join(tmpdir(), 'dsh-evolve-remote-'))
+  const seed = join(base, 'seed')
+  const remote = join(base, 'remote.git')
+  const clone = join(base, 'clone')
+  execFileSync('git', ['init', '-b', 'main', seed], { stdio: 'pipe' })
+  execFileSync('git', ['config', 'user.name', 'Codex'], { cwd: seed })
+  execFileSync('git', ['config', 'user.email', 'codex@example.com'], { cwd: seed })
+  writeFileSync(join(seed, 'README.md'), '# remote\n', 'utf8')
+  execFileSync('git', ['add', 'README.md'], { cwd: seed })
+  execFileSync('git', ['commit', '-m', 'init'], { cwd: seed, stdio: 'pipe' })
+  execFileSync('git', ['init', '--bare', remote], { stdio: 'pipe' })
+  execFileSync('git', ['remote', 'add', 'origin', remote], { cwd: seed })
+  execFileSync('git', ['push', '-u', 'origin', 'main'], { cwd: seed, stdio: 'pipe' })
+  execFileSync('git', ['clone', remote, clone], { stdio: 'pipe' })
+  return { remote, clone }
 }
 
 test('strategy helpers build stable branch and skill drafts', () => {
@@ -54,4 +72,46 @@ test('git helpers can write memory records into a real repository', () => {
   assert.equal(currentBranch(repo), 'main')
   assert.deepEqual(listBranches(repo), ['main'])
   assert.equal(gitStatus(repo).clean, true)
+})
+
+test('connectRepository accepts a checkout whose origin matches the configured remote', () => {
+  const { remote, clone } = initBareRemote()
+  const connected = connectRepository({
+    repoPath: clone,
+    repoUrl: remote,
+    auth: {
+      mode: 'ssh',
+      sshCommand: 'ssh',
+      tokenEnv: 'GITHUB_TOKEN',
+      token: '',
+      username: 'x-access-token',
+    },
+    memoryRoot: '.dsh-evolve/memory',
+    skillsRoot: '.dsh-evolve/skills',
+    defaultBranch: 'main',
+    remoteName: 'origin',
+    autoCommit: true,
+  })
+  assert.equal(connected, clone)
+})
+
+test('connectRepository rejects a checkout whose origin does not match the configured remote', () => {
+  const { clone } = initBareRemote()
+  const wrongRemote = join(tmpdir(), 'different-remote.git')
+  assert.throws(() => connectRepository({
+    repoPath: clone,
+    repoUrl: wrongRemote,
+    auth: {
+      mode: 'ssh',
+      sshCommand: 'ssh',
+      tokenEnv: 'GITHUB_TOKEN',
+      token: '',
+      username: 'x-access-token',
+    },
+    memoryRoot: '.dsh-evolve/memory',
+    skillsRoot: '.dsh-evolve/skills',
+    defaultBranch: 'main',
+    remoteName: 'origin',
+    autoCommit: true,
+  }), /expected/)
 })
