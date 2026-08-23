@@ -1,4 +1,4 @@
-# dsh-evolve-in-git
+﻿# dsh-evolve-in-git
 
 Git-backed long-term memory and evolution plugin for DeepSeek Harness.
 
@@ -6,6 +6,16 @@ Git-backed long-term memory and evolution plugin for DeepSeek Harness.
 
 This plugin treats a user-chosen or preconfigured Git repository as the memory store.
 It can write session notes, branch-specific records, and reusable skill drafts into that repo, then commit them as ordinary Git history.
+
+## Install
+
+```sh
+# example: install into the web profile
+ dsh plugin --profile web add github:Kytolly/dsh-evolve-in-git
+```
+
+The bundle inserts one `dsh-evolve-in-git` row with the plugin defaults.
+Later profile patches can override `repoPath`, `repoUrl`, `auth`, and the storage roots.
 
 ## Config
 
@@ -23,26 +33,32 @@ It can write session notes, branch-specific records, and reusable skill drafts i
 - `auth.mode: "ssh"` - use `ssh` or a custom `sshCommand`.
 - `auth.mode: "token"` - use `token` or a token from `tokenEnv` and a GitHub-style `Authorization` header.
 
-## Current API
+## Harness entry points (`v0.1.2`)
 
-- `status()` - read branch, head, and working-tree state.
-- `branches()` - list local branches.
-- `record(...)` - write one memory entry as markdown.
-- `draftSkill(...)` - generate a reusable skill draft.
-- `suggest(...)` - return a user-facing skill-promotion prompt.
-- `saveSkillDraft(...)` - persist a generated skill draft.
-- `createBranch(...)`, `checkout(...)`, `fetch()`, `push()` - Git workflow helpers.
-- `connect()` - ensure the local checkout exists and is linked to the remote memory repo.
-  It now validates that the configured remote exists, matches `repoUrl`, and is reachable with the current auth settings.
+Tools:
+
+- `evolve_connect`
+- `evolve_status`
+- `evolve_remember`
+- `evolve_branches`
+- `evolve_help`
+
+Human command:
+
+- `/evolve connect`
+- `/evolve status`
+- `/evolve branches`
+- `/evolve remember <kind> <title> :: <content>`
+- `/evolve help`
 
 ## Current slice
 
-`v0.1.1` focuses on the storage, branch, and private-remote connection layer.
-The next steps are user prompting, DSH tool exposure, skill sync, and branch-recovery policy.
+`v0.1.2` makes the plugin directly usable from Harness.
+It adds the first tool and command surfaces, but still leaves skill-promotion strategy, safe rollback, sync reminders, and timeline views for later versions.
 
 ## Limits
 
 - No automatic prompt injection yet.
 - No merge/conflict resolver yet.
-- No DSH tool or command registration yet.
 - No sync to the DSH skill registry yet.
+- No branch switch, diff, or revert command surface yet.

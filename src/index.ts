@@ -1,10 +1,13 @@
-/**
+﻿/**
  * Git-backed memory and evolution runtime for DeepSeek Harness.
  * @module dsh-evolve-in-git
  */
 
 import { Context, Service } from '@deepseek-ai/cordis'
+import type { CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands'
 import z from '@deepseek-ai/schemastery'
+import { defineTool } from '@deepseek-ai/dsh-tools'
+import type {} from '@deepseek-ai/dsh-system-prompt'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -16,20 +19,34 @@ import {
   fetchRemote,
   gitStatus,
   listBranches,
-  openRepository,
   pushBranch,
   writeMemoryRecord,
   writeSkillDraft,
 } from './git.js'
+import {
+  parseEvolveCommand,
+  renderBranchesText,
+  renderHelpText,
+  renderHelpView,
+  renderRememberText,
+  renderStatusText,
+  userFacingError,
+} from './harness.js'
 import type {
+  BranchesView,
   CommittedArtifact,
   EvolutionSuggestion,
   GitAuthConfig,
+  GitStatus,
+  HelpView,
+  MemoryKind,
   MemoryRecord,
   MemoryRecordInput,
+  RememberView,
   ResolvedConfig,
   SkillDraft,
   SkillDraftInput,
+  StatusView,
 } from './types.js'
 import {
   branchNameForRecord,
@@ -41,6 +58,9 @@ import {
   slugify,
   suggestEvolution,
 } from './strategy.js'
+
+export const name = 'dsh-evolve-in-git'
+export const inject = ['commands', 'tools', 'systemPrompt']
 
 export type * from './types.js'
 export {
@@ -54,6 +74,15 @@ export {
   gitStatus,
   pushBranch,
 } from './git.js'
+export {
+  parseEvolveCommand,
+  renderBranchesText,
+  renderHelpText,
+  renderHelpView,
+  renderRememberText,
+  renderStatusText,
+  userFacingError,
+} from './harness.js'
 export { branchNameForRecord, draftSkillFromRecord, memoryPreview, renderSkillDraft, sanitizeSegment, shouldOfferSkillPromotion, slugify, suggestEvolution } from './strategy.js'
 
 declare module '@deepseek-ai/cordis' {
@@ -87,6 +116,76 @@ const DEFAULT_AUTH = {
   username: 'x-access-token',
 }
 
+const PROMPT_TEXT =
+  'Use evolve_connect to verify the private memory repository, evolve_status to inspect branch and sync state, '
+  + 'evolve_remember to persist a reusable memory note, evolve_branches to inspect local evolution branches, and '
+  + 'evolve_help to recall the command and safety surface.'
+
+const STATUS_VIEW_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    repoPath: { type: 'string', required: true },
+    repoUrl: { type: 'string', required: true },
+    remoteName: { type: 'string', required: true },
+    verified: { type: 'boolean', required: true },
+    branch: { type: 'string', required: true },
+    head: { oneOf: [{ type: 'string' }, { type: 'null' }], required: true },
+    ahead: { type: 'integer', required: true },
+    behind: { type: 'integer', required: true },
+    clean: { type: 'boolean', required: true },
+    changedFiles: { type: 'array', required: true, items: { type: 'string' } },
+  },
+} as const
+
+const BRANCHES_VIEW_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    repoPath: { type: 'string', required: true },
+    repoUrl: { type: 'string', required: true },
+    remoteName: { type: 'string', required: true },
+    currentBranch: { type: 'string', required: true },
+    branches: { type: 'array', required: true, items: { type: 'string' } },
+  },
+} as const
+
+const REMEMBER_VIEW_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    repoPath: { type: 'string', required: true },
+    repoUrl: { type: 'string', required: true },
+    path: { type: 'string', required: true },
+    branch: { type: 'string', required: true },
+    commit: { oneOf: [{ type: 'string' }, { type: 'null' }], required: true },
+    message: { type: 'string', required: true },
+    kind: { type: 'string', required: true, enum: ['session', 'skill', 'warning', 'persona', 'note'] },
+    title: { type: 'string', required: true },
+    createdAt: { type: 'string', required: true },
+    source: { oneOf: [{ type: 'string' }, { type: 'null' }], required: true },
+    tags: { type: 'array', required: true, items: { type: 'string' } },
+  },
+} as const
+
+const HELP_VIEW_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    command: { type: 'string', required: true },
+    tools: { type: 'array', required: true, items: { type: 'string' } },
+    usage: { type: 'array', required: true, items: { type: 'string' } },
+    safety: { type: 'array', required: true, items: { type: 'string' } },
+  },
+} as const
+
+function jsonOutput(schema: unknown) {
+  return {
+    schema,
+    render: (_args: unknown, value: unknown) => [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }],
+  }
+}
+
 function resolveConfig(config: Config): ResolvedConfig {
   return {
     repoPath: config.repoPath?.trim() || DEFAULT_REPO_PATH,
@@ -100,10 +199,53 @@ function resolveConfig(config: Config): ResolvedConfig {
   }
 }
 
+function normalizeStatus(repoPath: string, config: ResolvedConfig, status: GitStatus): StatusView {
+  return {
+    repoPath,
+    repoUrl: config.repoUrl,
+    remoteName: config.remoteName,
+    verified: true,
+    branch: status.branch,
+    head: status.head ?? null,
+    ahead: status.ahead,
+    behind: status.behind,
+    clean: status.clean,
+    changedFiles: [...status.changedFiles],
+  }
+}
+
+function normalizeBranches(repoPath: string, config: ResolvedConfig, branches: string[]): BranchesView {
+  return {
+    repoPath,
+    repoUrl: config.repoUrl,
+    remoteName: config.remoteName,
+    currentBranch: currentBranch(repoPath),
+    branches,
+  }
+}
+
+function normalizeRemember(config: ResolvedConfig, value: CommittedArtifact & MemoryRecord): RememberView {
+  return {
+    repoPath: config.repoPath,
+    repoUrl: config.repoUrl,
+    path: value.path,
+    branch: value.branch,
+    commit: value.commit ?? null,
+    message: value.message,
+    kind: value.kind,
+    title: value.title,
+    createdAt: value.createdAt,
+    source: value.source ?? null,
+    tags: value.tags === undefined ? [] : [...value.tags],
+  }
+}
+
 /**
- * Runtime service for Git-backed memory, branch evolution, and skill drafts.
+ * Runtime service for Git-backed memory, branch evolution, Harness tools, and a human command.
  */
 export class GitEvolutionService extends Service {
+  static inject = inject
+
   static Config = z.object({
     repoPath: z.string().default(DEFAULT_REPO_PATH),
     repoUrl: z.string().default(DEFAULT_REPO_URL),
@@ -126,100 +268,181 @@ export class GitEvolutionService extends Service {
   constructor(ctx: Context, config: Config) {
     super(ctx, 'evolveGit')
     this.config = resolveConfig(config)
+    ctx.systemPrompt.section({
+      name: 'tool:evolve-git',
+      order: 116,
+      text: PROMPT_TEXT,
+    })
+    this.registerTools(ctx)
+    ctx.effect(() => ctx.commands.register({
+      name: 'evolve',
+      description: 'inspect or write Git-backed long-term memory',
+      input: { hint: 'connect|status|branches|remember <kind> <title> :: <content>|help' },
+      handler: invocation => this.runCommand(invocation),
+    }), 'dsh-evolve-in-git: command')
   }
 
-  /**
-   * Read the Git state for the configured repository.
-   * @returns the current branch, head, and working-tree summary.
-   */
+  private registerTools(ctx: Context): void {
+    ctx.tools.register(defineTool({
+      name: 'evolve_connect',
+      description: 'Ensure the configured private memory repository exists locally, matches the configured remote, and is reachable with the current auth settings.',
+      parameters: {},
+      output: jsonOutput(STATUS_VIEW_SCHEMA),
+      isConcurrencySafe: () => true,
+      execute: async () => this.connectView(),
+      presentCall: () => ({ card: 'generic', title: 'Connect evolve memory', kind: 'read' }),
+    }))
+
+    ctx.tools.register(defineTool({
+      name: 'evolve_status',
+      description: 'Read the current evolve-memory branch, HEAD, ahead/behind counts, cleanliness, and changed file list.',
+      parameters: {},
+      output: jsonOutput(STATUS_VIEW_SCHEMA),
+      isConcurrencySafe: () => true,
+      execute: async () => this.statusView(),
+      presentCall: () => ({ card: 'generic', title: 'Read evolve status', kind: 'read' }),
+    }))
+
+    ctx.tools.register(defineTool({
+      name: 'evolve_remember',
+      description: 'Write one long-term memory entry into the configured Git repository. Use this for warnings, persona guidance, reusable notes, or session memory worth preserving.',
+      parameters: {
+        kind: {
+          type: 'string',
+          required: true,
+          enum: ['session', 'skill', 'warning', 'persona', 'note'],
+          description: 'Memory kind to persist.',
+        },
+        title: { type: 'string', required: true, description: 'Short memory title.' },
+        content: { type: 'string', required: true, description: 'Memory content to persist.' },
+        source: { type: 'string', description: 'Optional source pointer, such as a session id or command origin.' },
+        branch: { type: 'string', description: 'Optional target branch; omit to use the current branch.' },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Optional memory tags.' },
+      },
+      output: jsonOutput(REMEMBER_VIEW_SCHEMA),
+      execute: async (args) => this.rememberView({
+        kind: args.kind as MemoryKind,
+        title: args.title,
+        content: args.content,
+        ...(args.source === undefined ? {} : { source: args.source }),
+        ...(args.branch === undefined ? {} : { branch: args.branch }),
+        ...(args.tags === undefined ? {} : { tags: args.tags }),
+      }),
+      presentCall: args => ({ card: 'generic', title: `Remember ${args.kind}`, kind: 'other', rawInput: args.title }),
+    }))
+
+    ctx.tools.register(defineTool({
+      name: 'evolve_branches',
+      description: 'List local evolution branches in the configured memory repository and report the current branch.',
+      parameters: {},
+      output: jsonOutput(BRANCHES_VIEW_SCHEMA),
+      isConcurrencySafe: () => true,
+      execute: async () => this.branchesView(),
+      presentCall: () => ({ card: 'generic', title: 'List evolve branches', kind: 'read' }),
+    }))
+
+    ctx.tools.register(defineTool({
+      name: 'evolve_help',
+      description: 'Show the supported evolve-memory command and tool surface, including the safe remember syntax.',
+      parameters: {},
+      output: jsonOutput(HELP_VIEW_SCHEMA),
+      isConcurrencySafe: () => true,
+      execute: async () => this.helpView(),
+      presentCall: () => ({ card: 'generic', title: 'Read evolve help', kind: 'read' }),
+    }))
+  }
+
   async status() {
     return gitStatus(connectRepository(this.config))
   }
 
-  /**
-   * List local branches in the configured repository.
-   * @returns the branch names.
-   */
+  async statusView(): Promise<StatusView> {
+    const repoPath = connectRepository(this.config)
+    return normalizeStatus(repoPath, this.config, gitStatus(repoPath))
+  }
+
   async branches(): Promise<string[]> {
     return listBranches(connectRepository(this.config))
   }
 
-  /**
-   * Record one memory entry as markdown inside the configured Git repository.
-   * @param record - memory entry to persist.
-   * @returns the persisted artifact and the commit that captured it.
-   */
+  async branchesView(): Promise<BranchesView> {
+    const repoPath = connectRepository(this.config)
+    return normalizeBranches(repoPath, this.config, listBranches(repoPath))
+  }
+
   async record(record: MemoryRecordInput): Promise<CommittedArtifact & MemoryRecord> {
     return writeMemoryRecord(this.config, record)
   }
 
-  /**
-   * Draft one reusable skill from a memory entry.
-   * @param record - memory entry to distill.
-   * @returns the draft skill body and its target path.
-   */
+  async rememberView(record: MemoryRecordInput): Promise<RememberView> {
+    return normalizeRemember(this.config, await this.record(record))
+  }
+
   async draftSkill(record: MemoryRecordInput): Promise<SkillDraft> {
     return renderSkillDraft(draftSkillFromRecord(record))
   }
 
-  /**
-   * Suggest whether a memory entry should become a reusable skill.
-   * @param record - memory entry to inspect.
-   * @returns a user-facing promotion prompt and a branch/draft suggestion.
-   */
   async suggest(record: MemoryRecordInput): Promise<EvolutionSuggestion> {
     return suggestEvolution(record)
   }
 
-  /**
-   * Persist a skill draft into the configured Git repository.
-   * @param draft - skill draft to write.
-   * @returns the persisted artifact and the commit that captured it.
-   */
   async saveSkillDraft(draft: SkillDraftInput): Promise<CommittedArtifact & SkillDraft> {
     return writeSkillDraft(this.config, draft)
   }
 
-  /**
-   * Create a new branch from the configured default branch or the current head.
-   * @param branch - branch name to create.
-   * @param from - optional start point; defaults to the configured default branch.
-   */
   async createBranch(branch: string, from?: string): Promise<void> {
     gitCreateBranch(connectRepository(this.config), branch, from ?? this.config.defaultBranch)
   }
 
-  /**
-   * Switch the configured repository to one named branch.
-   * @param branch - branch name to check out.
-   */
   async checkout(branch: string): Promise<void> {
     gitCheckoutBranch(connectRepository(this.config), branch)
   }
 
-  /**
-   * Fetch the configured remote.
-   */
   async fetch(): Promise<void> {
     const repoPath = connectRepository(this.config)
     fetchRemote(repoPath, this.config.remoteName, this.config.auth, this.config.repoUrl)
   }
 
-  /**
-   * Push one branch to the configured remote.
-   * @param branch - branch to push; defaults to the current branch.
-   */
   async push(branch?: string): Promise<void> {
     const repoPath = connectRepository(this.config)
     pushBranch(repoPath, branch ?? currentBranch(repoPath), this.config.remoteName, this.config.auth, this.config.repoUrl)
   }
 
-  /**
-   * Ensure the configured repository exists locally and is connected to the remote memory repo.
-   * @returns the Git status after connecting.
-   */
   async connect() {
     return gitStatus(connectRepository(this.config))
+  }
+
+  async connectView(): Promise<StatusView> {
+    const repoPath = connectRepository(this.config)
+    return normalizeStatus(repoPath, this.config, gitStatus(repoPath))
+  }
+
+  async helpView(): Promise<HelpView> {
+    return renderHelpView()
+  }
+
+  private async runCommand(invocation: CommandInvocation): Promise<CommandResult> {
+    try {
+      const parsed = parseEvolveCommand(invocation.rawInput)
+      switch (parsed.kind) {
+        case 'connect':
+          return { kind: 'success', text: renderStatusText('Memory repository connected', await this.connectView()) }
+        case 'status':
+          return { kind: 'success', text: renderStatusText('Memory repository status', await this.statusView()) }
+        case 'branches':
+          return { kind: 'success', text: renderBranchesText(await this.branchesView()) }
+        case 'remember':
+          return { kind: 'success', text: renderRememberText(await this.rememberView({ ...parsed.record, source: 'command:/evolve remember' })) }
+        case 'help':
+          return { kind: 'success', text: renderHelpText() }
+        case 'invalid':
+          return { kind: 'error', text: parsed.message }
+        default:
+          return { kind: 'error', text: renderHelpText() }
+      }
+    } catch (error: unknown) {
+      return { kind: 'error', text: userFacingError(error) }
+    }
   }
 }
 
