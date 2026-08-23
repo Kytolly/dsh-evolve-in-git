@@ -35,6 +35,10 @@ Later profile patches can override `repoPath`, `repoUrl`, `auth`, and the storag
 
 ## Harness entry points (`v0.1.2`)
 
+The plugin targets the current Harness `0.1.0-rc.8` host contracts for commands,
+tools, system prompt, and invariants. Install it into a profile, then restart
+that profile so the bundle layer is composed.
+
 Tools:
 
 - `evolve_connect`
@@ -50,6 +54,17 @@ Human command:
 - `/evolve branches`
 - `/evolve remember <kind> <title> :: <content>`
 - `/evolve help`
+
+After installation, verify composition before starting a long-lived profile:
+
+```sh
+dsh --profile web --dump-config
+dsh --profile web
+```
+
+The first command should show the `evolve-git` row from the plugin bundle. The
+second command boots the profile; once loaded, the model sees the five
+`evolve_*` tools and the UI command registry exposes `/evolve`.
 
 ## Current slice
 
