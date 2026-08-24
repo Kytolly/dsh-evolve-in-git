@@ -2,6 +2,10 @@
 
 Git-backed long-term memory and evolution plugin for DeepSeek Harness.
 
+## Version status
+
+`v0.1.1` has been accepted. It establishes the private-memory repository connection, secure SSH/token configuration, and the default local clone location.
+
 ## What it does
 
 This plugin treats a user-chosen Git repository as the memory store.
@@ -36,12 +40,13 @@ It can write session notes, branch-specific records, and reusable skill drafts i
 
 ## Current slice
 
-Phase 1 focuses on the storage and branch layer.
-The next steps are user prompting, DSH tool exposure, skill sync, and branch-recovery policy.
+`v0.1.1` completes the accepted private-memory connection slice: a user-chosen private repository can be cloned to the default local location and accessed with SSH or token-based Git authentication.
+
+The next release is `v0.1.2`, which will expose the existing service through DSH tools and commands so it can be used directly inside Harness.
 
 ## Limits
 
 - No automatic prompt injection yet.
 - No merge/conflict resolver yet.
-- No remote auth flow yet.
+- No interactive credential setup or credential-management UI yet; SSH/token authentication is configured through plugin settings or environment variables.
 - No sync to the DSH skill registry yet.
