@@ -33,7 +33,9 @@ import {
   userFacingError,
 } from './harness.js'
 import { configFilePath, mergeConfig, readConfigFile, writeConfigFile } from './config.js'
+import { makeConfigRoutes } from './config-route.js'
 import { installSettingsSection } from '@deepseek-ai/dsh-settings'
+import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type {
   BranchesView,
   CommittedArtifact,
@@ -108,7 +110,7 @@ const DEFAULT_MEMORY_ROOT = '.dsh-evolve/memory'
 const DEFAULT_SKILLS_ROOT = '.dsh-evolve/skills'
 const DEFAULT_BRANCH = 'main'
 const DEFAULT_REMOTE = 'origin'
-const DEFAULT_REPO_URL = 'https://github.com/Kytolly/dsh-remote-memory.git'
+const DEFAULT_REPO_URL = 'https://github.com/<your-github-username>/<your-memory-repo>.git'
 const DEFAULT_REPO_PATH = join(homedir(), '.dsh-evolve-in-git', 'remote-memory')
 const DEFAULT_AUTH = {
   mode: 'ssh' as const,
@@ -255,7 +257,7 @@ export class GitEvolutionService extends Service {
       mode: z.union([z.const('ssh'), z.const('token')]),
       sshCommand: z.string(),
       tokenEnv: z.string(),
-      token: z.string(),
+      token: z.string().role('secret'),
       username: z.string(),
     }).default(DEFAULT_AUTH),
     memoryRoot: z.string().default(DEFAULT_MEMORY_ROOT),
@@ -293,6 +295,7 @@ export class GitEvolutionService extends Service {
       input: { hint: 'connect|status|branches|remember <kind> <title> :: <content>|config show|open|refresh|set <key> <value>|help' },
       handler: invocation => this.runCommand(invocation),
     }), 'dsh-evolve-in-git: command')
+    this.registerConfigRoute(ctx)
   }
 
   /** Recompute this.config from the settings scope + config file over the Cordis base. */
@@ -369,6 +372,37 @@ export class GitEvolutionService extends Service {
       execute: async () => this.helpView(),
       presentCall: () => ({ card: 'generic', title: 'Read evolve help', kind: 'read' }),
     }))
+  }
+
+  /**
+   * Register the config-file routes ('/api/evolve-git/config') backing the
+   * browser config-file editor. The web server service is optional (headless
+   * profiles never mount one), so registration waits for it via
+   * 'internal/service'; writes reload the runtime config immediately.
+   */
+  private registerConfigRoute(ctx: Context): void {
+    const routes = makeConfigRoutes(() => this.refreshConfig())
+    ctx.effect(() => {
+      const disposers: (() => void)[] = []
+      let registered = false
+      const mount = (): void => {
+        if (registered) return
+        const host = (ctx.get('webServer') ?? ctx.get('httpServer')) as WebRouteHost | undefined
+        if (host === undefined) return
+        registered = true
+        for (const route of routes) disposers.push(host.register(route))
+      }
+      mount()
+      if (registered) return () => { for (const dispose of disposers) dispose() }
+      // The web server may mount after this plugin's apply: re-try on its service event.
+      const off = ctx.on('internal/service', (name: unknown) => {
+        if (name === 'webServer' || name === 'httpServer') mount()
+      })
+      return () => {
+        off()
+        for (const dispose of disposers) dispose()
+      }
+    }, 'dsh-evolve-in-git: config route')
   }
 
   async status() {
@@ -537,6 +571,11 @@ function setByPath(obj: any, path: string, value: unknown): void {
     cur = cur[part]
   }
   cur[parts[parts.length - 1] as string] = value
+}
+
+/** Minimal web-server face the config route needs (the full service is optional). */
+type WebRouteHost = {
+  register(route: WebRoute): () => void
 }
 
 export default GitEvolutionService

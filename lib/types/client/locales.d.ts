@@ -1,0 +1,121 @@
+/**
+ * `dsh-evolve-in-git` client namespace dictionaries (settings section copy).
+ * The settings section label and every card string resolve through these.
+ * @module dsh-evolve-in-git/client/locales
+ */
+/** Chinese dictionary — the source key set. */
+export declare const zh: {
+    'settings.title': string;
+    'settings.description': string;
+    'settings.nav': string;
+    'settings.inherit': string;
+    'settings.on': string;
+    'settings.off': string;
+    'settings.overridden': string;
+    'settings.reset': string;
+    'settings.notExposed': string;
+    'settings.readOnly': string;
+    'settings.expand': string;
+    'settings.collapse': string;
+    'settings.save': string;
+    'settings.saving': string;
+    'settings.discard': string;
+    'settings.unsaved': string;
+    'settings.saveFailed': string;
+    'settings.invalidNumber': string;
+    'field.repoPath': string;
+    'field.repoPath.hint': string;
+    'field.repoUrl': string;
+    'field.repoUrl.hint': string;
+    'field.authMode': string;
+    'field.authMode.hint': string;
+    'field.authMode.ssh': string;
+    'field.authMode.token': string;
+    'field.authSshCommand': string;
+    'field.authSshCommand.hint': string;
+    'field.authTokenEnv': string;
+    'field.authTokenEnv.hint': string;
+    'field.authToken': string;
+    'field.authToken.hint': string;
+    'field.authUsername': string;
+    'field.authUsername.hint': string;
+    'field.memoryRoot': string;
+    'field.memoryRoot.hint': string;
+    'field.skillsRoot': string;
+    'field.skillsRoot.hint': string;
+    'field.defaultBranch': string;
+    'field.defaultBranch.hint': string;
+    'field.remoteName': string;
+    'field.remoteName.hint': string;
+    'field.autoCommit': string;
+    'field.autoCommit.hint': string;
+    'configFile.title': string;
+    'configFile.description': string;
+    'configFile.loading': string;
+    'configFile.saving': string;
+    'configFile.save': string;
+    'configFile.reload': string;
+    'configFile.saved': string;
+    'configFile.error': string;
+    'configFile.empty': string;
+};
+/** The evolve client namespace key union. */
+export type EvolveClientKey = keyof typeof zh;
+/** English dictionary, checked complete against the zh key set. */
+export declare const en: {
+    'settings.title': string;
+    'settings.description': string;
+    'settings.nav': string;
+    'settings.inherit': string;
+    'settings.on': string;
+    'settings.off': string;
+    'settings.overridden': string;
+    'settings.reset': string;
+    'settings.notExposed': string;
+    'settings.readOnly': string;
+    'settings.expand': string;
+    'settings.collapse': string;
+    'settings.save': string;
+    'settings.saving': string;
+    'settings.discard': string;
+    'settings.unsaved': string;
+    'settings.saveFailed': string;
+    'settings.invalidNumber': string;
+    'field.repoPath': string;
+    'field.repoPath.hint': string;
+    'field.repoUrl': string;
+    'field.repoUrl.hint': string;
+    'field.authMode': string;
+    'field.authMode.hint': string;
+    'field.authMode.ssh': string;
+    'field.authMode.token': string;
+    'field.authSshCommand': string;
+    'field.authSshCommand.hint': string;
+    'field.authTokenEnv': string;
+    'field.authTokenEnv.hint': string;
+    'field.authToken': string;
+    'field.authToken.hint': string;
+    'field.authUsername': string;
+    'field.authUsername.hint': string;
+    'field.memoryRoot': string;
+    'field.memoryRoot.hint': string;
+    'field.skillsRoot': string;
+    'field.skillsRoot.hint': string;
+    'field.defaultBranch': string;
+    'field.defaultBranch.hint': string;
+    'field.remoteName': string;
+    'field.remoteName.hint': string;
+    'field.autoCommit': string;
+    'field.autoCommit.hint': string;
+    'configFile.title': string;
+    'configFile.description': string;
+    'configFile.loading': string;
+    'configFile.saving': string;
+    'configFile.save': string;
+    'configFile.reload': string;
+    'configFile.saved': string;
+    'configFile.error': string;
+    'configFile.empty': string;
+};
+/** The two dictionaries, keyed by language. */
+export declare const dictionaries: Record<string, Record<EvolveClientKey, string>>;

@@ -24,13 +24,22 @@ is split by the CLI argument parser, so use a space-less path (a junction or sho
 > dsh plugin --profile web add file:C:/Users/13928/.dsh/evolve-in-git
 > ```
 >
-> `lib/` is git-ignored, so the `github:` route only works once the built `lib/` is
-> shipped (commit it, or let `prepare` build it on install).
+> The built `lib/` (including the browser `lib/client.js`) is committed, so the
+> `github:` route works as-is. Rebuild locally with `pnpm build` after source
+> changes, then commit the artifacts.
 
 ## Config
 
+> **Web settings UI (v0.1.4+).** The plugin ships a browser half that registers a
+> first-level **Settings → 演进记忆** section on the web profile's Settings page.
+> The section binds the `evolve-git` settings namespace and edits every field
+> below through the official settings transport (nested `auth` is written as one
+> merged object); the `auth.token` field is write-only (redacted from the wire).
+> Requires the profile to be restarted after install so the client manifest is
+> rescanned.
+
 - `repoPath` - the local Git checkout that stores memory and skills. Defaults to `~/.dsh-evolve-in-git/remote-memory`.
-- `repoUrl` - the remote memory repository. Defaults to `https://github.com/Kytolly/dsh-remote-memory.git`.
+- `repoUrl` - the remote memory repository. **No personal default ships with the plugin**: the built-in default is the placeholder `https://github.com/<your-github-username>/<your-memory-repo>.git`, so configure your own repository (see "Per-user config file" below).
 - `auth` - Git auth settings for private access. The default profile is SSH-first and token-capable.
 - `memoryRoot` - where memory records are written, default `.dsh-evolve/memory`.
 - `skillsRoot` - where skill drafts are written, default `.dsh-evolve/skills`.
@@ -42,6 +51,31 @@ is split by the CLI argument parser, so use a space-less path (a junction or sho
 
 - `auth.mode: "ssh"` - use `ssh` or a custom `sshCommand`.
 - `auth.mode: "token"` - use `token` or a token from `tokenEnv` and a GitHub-style `Authorization` header.
+
+### Per-user config file
+
+Each DSH user keeps one local config file at `$DSH_HOME/evolve-in-git.json`
+(`~/.dsh/evolve-in-git.json` by default). It is **user-local and never part of any
+Git repository** — do not commit it. Create or edit it directly, or use the
+`/evolve config show|open|refresh|set <key> <value>` command. Values here override
+the plugin defaults and the profile patch layer; the web Settings → 演进记忆
+section edits the same fields through the settings document.
+
+Example:
+
+```json
+{
+  "repoPath": "/absolute/path/to/your/local-memory-checkout",
+  "repoUrl": "https://github.com/<your-github-username>/<your-memory-repo>.git"
+}
+```
+
+> **Never put access tokens in this file** — use `auth.tokenEnv` to name an
+> environment variable, or the web settings token field (write-only).
+
+The web Settings → 演进记忆 section also embeds a **config-file editor** that
+opens this file directly, edits it as raw JSON, and saves it through the
+loopback-only `/api/evolve-git/config` route (saves apply immediately).
 
 ## Harness entry points (`v0.1.3`)
 
@@ -76,9 +110,19 @@ The first command should show the `evolve-git` row from the plugin bundle. The
 second command boots the profile; once loaded, the model sees the five
 `evolve_*` tools and the UI command registry exposes `/evolve`.
 
+## Browser half (`v0.1.4+`)
+
+- `src/client/` - the browser bundle (`lib/client.js`) compiled by
+  `tsc -p tsconfig.client.json && tsdown` (see `tsdown.config.ts`); registered as
+  a `settings.section` slot so the web Settings page renders the config form.
+- `package.json` - `exports["./client"]` + `dsh.client` (`platform: "web"`) are
+  the manifest contract `dsh-client-modules` scans to include the bundle in
+  `window.__DSH_BOOT__`.
+
 ## Current slice
 
-`v0.1.3` makes the plugin directly usable from Harness.
+`v0.1.4` makes the plugin directly usable from Harness and adds the web
+settings UI.
 It adds the first tool and command surfaces, but still leaves skill-promotion strategy, safe rollback, sync reminders, and timeline views for later versions.
 
 ## Limits

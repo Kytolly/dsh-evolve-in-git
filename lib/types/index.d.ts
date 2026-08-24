@@ -81,6 +81,13 @@ export declare class GitEvolutionService extends Service {
     /** Recompute this.config from the settings scope + config file over the Cordis base. */
     private refreshConfig;
     private registerTools;
+    /**
+     * Register the config-file routes ('/api/evolve-git/config') backing the
+     * browser config-file editor. The web server service is optional (headless
+     * profiles never mount one), so registration waits for it via
+     * 'internal/service'; writes reload the runtime config immediately.
+     */
+    private registerConfigRoute;
     status(): Promise<GitStatus>;
     statusView(): Promise<StatusView>;
     branches(): Promise<string[]>;
