@@ -1,6 +1,6 @@
 {
   "name": "dsh-evolve-in-git",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Git-backed long-term memory and evolution plugin for DeepSeek Harness",
   "private": false,
   "type": "module",
@@ -33,35 +33,51 @@
       "types": "./lib/types/strategy.d.ts",
       "default": "./lib/strategy.js"
     },
+    "./harness": {
+      "types": "./lib/types/harness.d.ts",
+      "default": "./lib/harness.js"
+    },
     "./invariant": {
       "types": "./lib/types/invariant.d.ts",
       "default": "./lib/invariant.js"
     },
+    "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
   "files": [
     "lib/index.js",
     "lib/git.js",
     "lib/strategy.js",
+    "lib/harness.js",
     "lib/invariant.js",
+    "cordis.patch.yml",
     "lib/types/**/*.d.ts"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "prepare": "npm run build",
     "test": "node --import tsx/esm --test tests/**/*.spec.ts",
     "check": "npm run build && npm run test"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
   },
   "dependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
     "@deepseek-ai/schemastery": "^3.18.1"
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-invariants": "^0.0.1-rc.1"
+    "@deepseek-ai/dsh-commands": "^0.1.0-rc.8",
+    "@deepseek-ai/dsh-invariants": "^0.1.0-rc.8",
+    "@deepseek-ai/dsh-system-prompt": "^0.1.0-rc.8",
+    "@deepseek-ai/dsh-tools": "^0.1.0-rc.8"
   },
   "devDependencies": {
-    "@deepseek-ai/dsh-invariants": "^0.0.1-rc.1",
     "@types/node": "^22.20.0",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3"
-  }
+  },
+  "packageManager": "pnpm@11.22.0+sha512.1ff870c4c6133dfd88fb2afc46dd13d47f09c9794b438c6fdb47ca98caf3bc16381ee0be93a091b8e3824cf01f889f46d7d9e20910fb0be1ab0fb5baa80dd621"
 }
