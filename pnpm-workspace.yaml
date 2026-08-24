@@ -2,3 +2,5 @@ allowBuilds:
   esbuild: true
 
 autoInstallPeers: false
+
+nodeLinker: hoisted

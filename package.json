@@ -55,7 +55,6 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "prepare": "npm run build",
     "test": "node --import tsx/esm --test tests/**/*.spec.ts",
     "check": "npm run build && npm run test"
   },
@@ -69,15 +68,14 @@
     "@deepseek-ai/schemastery": "^3.18.1"
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-commands": "^0.1.0-rc.8",
-    "@deepseek-ai/dsh-invariants": "^0.1.0-rc.8",
-    "@deepseek-ai/dsh-system-prompt": "^0.1.0-rc.8",
-    "@deepseek-ai/dsh-tools": "^0.1.0-rc.8"
+    "@deepseek-ai/dsh-commands": "^0.1.0-rc.7",
+    "@deepseek-ai/dsh-invariants": "^0.1.0-rc.7",
+    "@deepseek-ai/dsh-system-prompt": "^0.1.0-rc.7",
+    "@deepseek-ai/dsh-tools": "^0.1.0-rc.7"
   },
   "devDependencies": {
     "@types/node": "^22.20.0",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3"
-  },
-  "packageManager": "pnpm@11.22.0+sha512.1ff870c4c6133dfd88fb2afc46dd13d47f09c9794b438c6fdb47ca98caf3bc16381ee0be93a091b8e3824cf01f889f46d7d9e20910fb0be1ab0fb5baa80dd621"
+  }
 }
