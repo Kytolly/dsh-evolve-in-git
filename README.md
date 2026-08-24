@@ -56,10 +56,11 @@ is split by the CLI argument parser, so use a space-less path (a junction or sho
 
 Each DSH user keeps one local config file at `$DSH_HOME/evolve-in-git.json`
 (`~/.dsh/evolve-in-git.json` by default). It is **user-local and never part of any
-Git repository** — do not commit it. Create or edit it directly, or use the
-`/evolve config show|open|refresh|set <key> <value>` command. Values here override
-the plugin defaults and the profile patch layer; the web Settings → 演进记忆
-section edits the same fields through the settings document.
+Git repository** — do not commit it. The file is the **single user configuration
+layer**: the web Settings → 演进记忆 form reads and writes exactly this file
+(showing the defaults overlaid by your file values, and saving writes the file
+immediately), and the `/evolve config show|open|refresh|set <key> <value>`
+commands edit it too. The embedded config-file editor opens the raw JSON.
 
 Example:
 

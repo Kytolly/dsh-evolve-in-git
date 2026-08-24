@@ -10,7 +10,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from 'node:http'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
-import { configFilePath } from './config.js'
+import { configFilePath, readConfigFile } from './config.js'
+import { DEFAULT_CONFIG } from './defaults.js'
 import { isLoopbackRequest } from './loopback.js'
 
 /** Browser-facing base path of the config-file API. */
@@ -87,7 +88,8 @@ async function handle(req: IncomingMessage, res: ServerResponse, onSaved: (() =>
   if (req.method === 'GET') {
     const exists = existsSync(path)
     const raw = exists ? readFileSync(path, 'utf8') : ''
-    writeJson(res, 200, { ok: true, path, exists, raw })
+    const config = exists ? readConfigFile() : {}
+    writeJson(res, 200, { ok: true, path, exists, raw, config, defaults: DEFAULT_CONFIG })
     return
   }
   if (req.method === 'PUT') {

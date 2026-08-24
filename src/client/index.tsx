@@ -11,11 +11,11 @@
  * @module dsh-evolve-in-git/client
  */
 
-import type { ClientContext, SettingsScope, SettingsScopeSpec } from '@deepseek-ai/dsh-client-runtime/client'
+import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
-import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
-import { EvolveSettingsSection, EvolveSettingsCardController, type EvolveSettings } from './EvolveSettingsCard.tsx'
+import { EvolveSettingsSection, EvolveSettingsCardController } from './EvolveSettingsCard.tsx'
+import { ConfigFileScope } from './config-file-scope.ts'
 import { dictionaries, type EvolveClientKey } from './locales.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -25,22 +25,11 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
   }
 }
 
-declare module '@deepseek-ai/cordis' {
-  interface Context {
-    /**
-     * Optional rc.6 compatibility binder provided by the dsh-web settings
-     * family; absent when that group plugin is not installed, so callers fall
-     * back to the official settings scope.
-     */
-    webUiSettings?: { bind<S>(spec: SettingsScopeSpec<S>): SettingsScope<S> }
-  }
-}
-
-/** Locale namespace of the browser half (mirrors the settings namespace id). */
+/** Locale namespace of the browser half (matches the plugin package id). */
 export const NS = 'evolve-git' as const
 
-/** Required services: slots for the settings section, locale for the copy, and the settings scope the form binds. */
-export const inject = ['slots', 'locale', 'settingsScope']
+/** Required services: slots for the settings section and locale for the copy. The form reads the config file directly. */
+export const inject = ['slots', 'locale']
 
 /** Apply the browser half. */
 export function apply(ctx: ClientContext): void {
@@ -52,11 +41,14 @@ export function apply(ctx: ClientContext): void {
     }
   }, 'dsh-evolve-in-git: dictionaries')
 
-  // Bound through the family bridge when the official scope does not expose
-  // the namespace directly (the same fallback dsh-pet / describe-image use).
-  const binder = ctx.get('webUiSettings') ?? ctx.settingsScope
-  const settingsScope = binder.bind<EvolveSettings>({ namespace: NS })
-  const controller = new EvolveSettingsCardController(settingsScope)
+  // The form reads and writes the per-user config file directly (the single
+  // user layer), so no settings-namespace bind is involved.
+  const configScope = new ConfigFileScope()
+  ctx.effect(() => {
+    void configScope.load()
+    return () => {}
+  }, 'dsh-evolve-in-git: config load')
+  const controller = new EvolveSettingsCardController(configScope)
 
   // First-level settings section: one staged form over the 'evolve-git'
   // namespace, registered as a top-level settings page. The section entry
@@ -75,6 +67,7 @@ export function apply(ctx: ClientContext): void {
       return () => {
         unregister()
         controller.dispose()
+        configScope.dispose()
       }
     } catch {
       return () => {}

@@ -10,6 +10,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
+import { CONFIG_SAVED_EVENT } from './config-file-scope.ts'
 import type { EvolveClientKey } from './locales.ts'
 import css from './settings-card.module.css'
 
@@ -90,6 +91,8 @@ export function ConfigFileEditor(props: ConfigFileEditorProps) {
         setPath(body.path ?? path)
         setStatus('saved')
         setMessage('')
+        // The settings form reads the same document; tell it to reload.
+        window.dispatchEvent(new CustomEvent(CONFIG_SAVED_EVENT))
       })
       .catch((error: unknown) => {
         setStatus('error')

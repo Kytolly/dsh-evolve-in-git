@@ -8,8 +8,6 @@ import type { CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands
 import z from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-system-prompt'
-import { homedir } from 'node:os'
-import { join } from 'node:path'
 import {
   checkoutBranch as gitCheckoutBranch,
   connectRepository,
@@ -33,8 +31,8 @@ import {
   userFacingError,
 } from './harness.js'
 import { configFilePath, mergeConfig, readConfigFile, writeConfigFile } from './config.js'
+import { DEFAULT_AUTH, DEFAULT_BRANCH, DEFAULT_MEMORY_ROOT, DEFAULT_REMOTE, DEFAULT_REPO_PATH, DEFAULT_REPO_URL, DEFAULT_SKILLS_ROOT } from './defaults.js'
 import { makeConfigRoutes } from './config-route.js'
-import { installSettingsSection } from '@deepseek-ai/dsh-settings'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type {
   BranchesView,
@@ -104,20 +102,6 @@ export interface Config {
   defaultBranch?: string
   remoteName?: string
   autoCommit?: boolean
-}
-
-const DEFAULT_MEMORY_ROOT = '.dsh-evolve/memory'
-const DEFAULT_SKILLS_ROOT = '.dsh-evolve/skills'
-const DEFAULT_BRANCH = 'main'
-const DEFAULT_REMOTE = 'origin'
-const DEFAULT_REPO_URL = 'https://github.com/<your-github-username>/<your-memory-repo>.git'
-const DEFAULT_REPO_PATH = join(homedir(), '.dsh-evolve-in-git', 'remote-memory')
-const DEFAULT_AUTH = {
-  mode: 'ssh' as const,
-  sshCommand: 'ssh',
-  tokenEnv: 'GITHUB_TOKEN',
-  token: '',
-  username: 'x-access-token',
 }
 
 const PROMPT_TEXT =
@@ -269,20 +253,11 @@ export class GitEvolutionService extends Service {
 
   config: ResolvedConfig
   private readonly baseConfig: Config
-  private configSource: (() => unknown) | undefined = undefined
 
   constructor(ctx: Context, config: Config) {
     super(ctx, 'evolveGit')
     this.baseConfig = config
     this.config = resolveConfig(mergeConfig(config, readConfigFile()) as Config)
-    installSettingsSection(ctx, 'evolve-git', GitEvolutionService.Config as any, config, {
-      setSource: (source: () => unknown) => {
-        this.configSource = source
-        this.refreshConfig()
-      },
-      onChange: () => this.refreshConfig(),
-      validate: (value: unknown) => resolveConfig(mergeConfig(this.baseConfig, value as Config) as Config),
-    })
     ctx.systemPrompt.section({
       name: 'tool:evolve-git',
       order: 116,
@@ -298,10 +273,9 @@ export class GitEvolutionService extends Service {
     this.registerConfigRoute(ctx)
   }
 
-  /** Recompute this.config from the settings scope + config file over the Cordis base. */
+  /** Recompute this.config from the config file over the Cordis base (the config file is the single user layer). */
   private refreshConfig(): void {
-    const scopeValue = (this.configSource?.() as Config | undefined) ?? {}
-    this.config = resolveConfig(mergeConfig(this.baseConfig, mergeConfig(scopeValue, readConfigFile())) as Config)
+    this.config = resolveConfig(mergeConfig(this.baseConfig, readConfigFile()) as Config)
   }
 
   private registerTools(ctx: Context): void {
