@@ -1,4 +1,4 @@
-﻿# dsh-evolve-in-git
+# dsh-evolve-in-git
 
 Git-backed long-term memory and evolution plugin for DeepSeek Harness.
 
@@ -17,6 +17,16 @@ It can write session notes, branch-specific records, and reusable skill drafts i
 The bundle inserts one `dsh-evolve-in-git` row with the plugin defaults.
 Later profile patches can override `repoPath`, `repoUrl`, `auth`, and the storage roots.
 
+> **Windows local install.** A `file:` source containing spaces (`D:\Deepseek Harness\…`)
+is split by the CLI argument parser, so use a space-less path (a junction or short path):
+>
+> ```sh
+> dsh plugin --profile web add file:C:/Users/13928/.dsh/evolve-in-git
+> ```
+>
+> `lib/` is git-ignored, so the `github:` route only works once the built `lib/` is
+> shipped (commit it, or let `prepare` build it on install).
+
 ## Config
 
 - `repoPath` - the local Git checkout that stores memory and skills. Defaults to `~/.dsh-evolve-in-git/remote-memory`.
@@ -33,11 +43,11 @@ Later profile patches can override `repoPath`, `repoUrl`, `auth`, and the storag
 - `auth.mode: "ssh"` - use `ssh` or a custom `sshCommand`.
 - `auth.mode: "token"` - use `token` or a token from `tokenEnv` and a GitHub-style `Authorization` header.
 
-## Harness entry points (`v0.1.2`)
+## Harness entry points (`v0.1.3`)
 
-The plugin targets the current Harness `0.1.0-rc.8` host contracts for commands,
-tools, system prompt, and invariants. Install it into a profile, then restart
-that profile so the bundle layer is composed.
+The plugin targets the current Harness `0.1.1-rc.2` host contracts for commands,
+tools, system prompt, and invariants (peerDependencies are `^0.1.1-rc.2`). Install it
+into a profile, then restart that profile so the bundle layer is composed.
 
 Tools:
 
@@ -68,7 +78,7 @@ second command boots the profile; once loaded, the model sees the five
 
 ## Current slice
 
-`v0.1.2` makes the plugin directly usable from Harness.
+`v0.1.3` makes the plugin directly usable from Harness.
 It adds the first tool and command surfaces, but still leaves skill-promotion strategy, safe rollback, sync reminders, and timeline views for later versions.
 
 ## Limits

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Git-backed memory and evolution runtime for DeepSeek Harness.
  * @module dsh-evolve-in-git
  */
@@ -32,6 +32,7 @@ import {
   renderStatusText,
   userFacingError,
 } from './harness.js'
+import { configFilePath, mergeConfig, readConfigFile, writeConfigFile } from './config.js'
 import type {
   BranchesView,
   CommittedArtifact,
@@ -263,11 +264,13 @@ export class GitEvolutionService extends Service {
     autoCommit: z.boolean().default(true),
   })
 
-  readonly config: ResolvedConfig
+  config: ResolvedConfig
+  private readonly baseConfig: Config
 
   constructor(ctx: Context, config: Config) {
     super(ctx, 'evolveGit')
-    this.config = resolveConfig(config)
+    this.baseConfig = config
+    this.config = resolveConfig(mergeConfig(config, readConfigFile()) as Config)
     ctx.systemPrompt.section({
       name: 'tool:evolve-git',
       order: 116,
@@ -277,7 +280,7 @@ export class GitEvolutionService extends Service {
     ctx.effect(() => ctx.commands.register({
       name: 'evolve',
       description: 'inspect or write Git-backed long-term memory',
-      input: { hint: 'connect|status|branches|remember <kind> <title> :: <content>|help' },
+      input: { hint: 'connect|status|branches|remember <kind> <title> :: <content>|config show|open|refresh|set <key> <value>|help' },
       handler: invocation => this.runCommand(invocation),
     }), 'dsh-evolve-in-git: command')
   }
@@ -423,7 +426,11 @@ export class GitEvolutionService extends Service {
 
   private async runCommand(invocation: CommandInvocation): Promise<CommandResult> {
     try {
-      const parsed = parseEvolveCommand(invocation.rawInput)
+      const input = invocation.rawInput.trim()
+      if (input.startsWith('config')) {
+        return this.runConfigCommand(input.slice('config'.length).trim())
+      }
+      const parsed = parseEvolveCommand(input)
       switch (parsed.kind) {
         case 'connect':
           return { kind: 'success', text: renderStatusText('Memory repository connected', await this.connectView()) }
@@ -444,6 +451,76 @@ export class GitEvolutionService extends Service {
       return { kind: 'error', text: userFacingError(error) }
     }
   }
+
+  private runConfigCommand(rest: string): CommandResult {
+    const path = configFilePath()
+    const parts = rest.trim().split(/\s+/).filter(Boolean)
+    const cmd = parts[0] ?? 'show'
+    const show = (): { kind: 'success'; text: string } => ({
+      kind: 'success',
+      text: [
+        'EvolveInGit config file: ' + path,
+        'repoPath: ' + this.config.repoPath,
+        'repoUrl: ' + this.config.repoUrl,
+        'auth.mode: ' + this.config.auth.mode,
+        'auth.tokenEnv: ' + (this.config.auth.tokenEnv ?? ''),
+        'memoryRoot: ' + this.config.memoryRoot,
+        'skillsRoot: ' + this.config.skillsRoot,
+        'defaultBranch: ' + this.config.defaultBranch,
+        'remoteName: ' + this.config.remoteName,
+        'autoCommit: ' + String(this.config.autoCommit),
+      ].join('\n'),
+    })
+    const reloadText = (): string => 'Config reloaded from:\n  ' + path
+    switch (cmd) {
+      case 'show':
+        return show()
+      case 'open':
+        return { kind: 'success', text: 'Open the config file in your editor:\n  ' + path }
+      case 'refresh':
+        this.config = resolveConfig(mergeConfig(this.baseConfig, readConfigFile()) as Config)
+        return { kind: 'success', text: reloadText() }
+      case 'set': {
+        const key = parts[1]
+        const value = parts.slice(2).join(' ')
+        if (!key || value.length === 0) {
+          return { kind: 'error', text: 'Usage: /evolve config set <key> <value>' }
+        }
+        const current = readConfigFile()
+        const parsedValue = parseConfigValue(value)
+        setByPath(current, key, parsedValue)
+        writeConfigFile(current)
+        this.config = resolveConfig(mergeConfig(this.baseConfig, readConfigFile()) as Config)
+        return { kind: 'success', text: 'Saved ' + key + ' = ' + JSON.stringify(parsedValue) + ' -> ' + path }
+      }
+      default:
+        return { kind: 'error', text: 'Usage: /evolve config show|open|refresh|set <key> <value>' }
+    }
+  }
+}
+
+function parseConfigValue(raw: string): unknown {
+  const trimmed = raw.trim()
+  if (trimmed === 'true') return true
+  if (trimmed === 'false') return false
+  if (/^-?\d+$/.test(trimmed)) return Number(trimmed)
+  try {
+    return JSON.parse(trimmed)
+  } catch {
+    return trimmed
+  }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function setByPath(obj: any, path: string, value: unknown): void {
+  const parts = path.split('.')
+  let cur = obj
+  for (let i = 0; i < parts.length - 1; i++) {
+    const part = parts[i] as string
+    if (typeof cur[part] !== 'object' || cur[part] === null) cur[part] = {}
+    cur = cur[part]
+  }
+  cur[parts[parts.length - 1] as string] = value
 }
 
 export default GitEvolutionService
