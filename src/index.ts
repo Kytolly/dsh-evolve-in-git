@@ -4,6 +4,8 @@
  */
 
 import { Context, Service } from '@deepseek-ai/cordis'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import type { CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands'
 import z from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -174,9 +176,16 @@ function jsonOutput(schema: unknown) {
   }
 }
 
+/** Expand a leading '~' in a user-supplied path to the home directory (node:path does not). */
+function expandHome(path: string): string {
+  if (path === '~') return homedir()
+  if (path.startsWith('~/')) return join(homedir(), path.slice(2))
+  return path
+}
+
 function resolveConfig(config: Config): ResolvedConfig {
   return {
-    repoPath: config.repoPath?.trim() || DEFAULT_REPO_PATH,
+    repoPath: expandHome(config.repoPath?.trim() || DEFAULT_REPO_PATH),
     repoUrl: config.repoUrl?.trim() || DEFAULT_REPO_URL,
     auth: config.auth ?? DEFAULT_AUTH,
     memoryRoot: config.memoryRoot?.trim() || DEFAULT_MEMORY_ROOT,
