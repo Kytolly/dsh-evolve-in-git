@@ -76,7 +76,10 @@ export declare class GitEvolutionService extends Service {
     }>>;
     config: ResolvedConfig;
     private readonly baseConfig;
+    private configSource;
     constructor(ctx: Context, config: Config);
+    /** Recompute this.config from the settings scope + config file over the Cordis base. */
+    private refreshConfig;
     private registerTools;
     status(): Promise<GitStatus>;
     statusView(): Promise<StatusView>;

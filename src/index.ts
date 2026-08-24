@@ -33,6 +33,7 @@ import {
   userFacingError,
 } from './harness.js'
 import { configFilePath, mergeConfig, readConfigFile, writeConfigFile } from './config.js'
+import { installSettingsSection } from '@deepseek-ai/dsh-settings'
 import type {
   BranchesView,
   CommittedArtifact,
@@ -266,11 +267,20 @@ export class GitEvolutionService extends Service {
 
   config: ResolvedConfig
   private readonly baseConfig: Config
+  private configSource: (() => unknown) | undefined = undefined
 
   constructor(ctx: Context, config: Config) {
     super(ctx, 'evolveGit')
     this.baseConfig = config
     this.config = resolveConfig(mergeConfig(config, readConfigFile()) as Config)
+    installSettingsSection(ctx, 'evolve-git', GitEvolutionService.Config as any, config, {
+      setSource: (source: () => unknown) => {
+        this.configSource = source
+        this.refreshConfig()
+      },
+      onChange: () => this.refreshConfig(),
+      validate: (value: unknown) => resolveConfig(mergeConfig(this.baseConfig, value as Config) as Config),
+    })
     ctx.systemPrompt.section({
       name: 'tool:evolve-git',
       order: 116,
@@ -283,6 +293,12 @@ export class GitEvolutionService extends Service {
       input: { hint: 'connect|status|branches|remember <kind> <title> :: <content>|config show|open|refresh|set <key> <value>|help' },
       handler: invocation => this.runCommand(invocation),
     }), 'dsh-evolve-in-git: command')
+  }
+
+  /** Recompute this.config from the settings scope + config file over the Cordis base. */
+  private refreshConfig(): void {
+    const scopeValue = (this.configSource?.() as Config | undefined) ?? {}
+    this.config = resolveConfig(mergeConfig(this.baseConfig, mergeConfig(scopeValue, readConfigFile())) as Config)
   }
 
   private registerTools(ctx: Context): void {
