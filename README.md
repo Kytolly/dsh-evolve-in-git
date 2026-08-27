@@ -78,7 +78,7 @@ The web Settings → 演进记忆 section also embeds a **config-file editor** t
 opens this file directly, edits it as raw JSON, and saves it through the
 loopback-only `/api/evolve-git/config` route (saves apply immediately).
 
-## Harness entry points (`v0.2.1`)
+## Harness entry points (`v0.3.0`)
 
 The plugin targets the current Harness `0.1.1-rc.2` host contracts for commands,
 tools, system prompt, and invariants (peerDependencies are `^0.1.1-rc.2`). Install it
@@ -93,6 +93,8 @@ Tools:
 - `evolve_skill_draft`
 - `evolve_skill_list`
 - `evolve_skill_promote`
+- `evolve_rollback`
+- `evolve_conflicts`
 - `evolve_help`
 
 Human command:
@@ -105,6 +107,8 @@ Human command:
 - `/evolve skill list`
 - `/evolve skill promote <name>`
 - `/evolve skill sync`
+- `/evolve rollback <ref> [--dry]`
+- `/evolve conflicts`
 - `/evolve help`
 
 After installation, verify composition before starting a long-lived profile:
@@ -144,6 +148,6 @@ views, and automatic prompt injection are still later work.
 ## Limits
 
 - No automatic prompt injection yet.
-- No merge/conflict resolver yet.
+- No automatic merge/conflict **resolver** yet (safe `rollback` and `conflicts` detection are available; choosing ours/theirs/both to resolve is still to come).
 - No automatic sync/pull of registered skills back into the memory repo.
 - No branch switch, diff, or revert command surface yet.

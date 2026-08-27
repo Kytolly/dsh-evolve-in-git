@@ -19,7 +19,9 @@ import {
   fetchRemote,
   gitStatus,
   listBranches,
+  listConflicts,
   pushBranch,
+  revertCommit,
   writeMemoryRecord,
   writeSkillDraft,
 } from './git.js'
@@ -110,7 +112,7 @@ export interface Config {
 const PROMPT_TEXT =
   'Use evolve_connect to verify the private memory repository, evolve_status to inspect branch and sync state, '
   + 'evolve_remember to persist a reusable memory note, evolve_branches to inspect local evolution branches, '
-  + 'evolve_skill_draft to turn a memory into a skill draft, evolve_skill_list to see promotable skill drafts, evolve_skill_promote to install one into the skill registry, and '
+  + 'evolve_skill_draft to turn a memory into a skill draft, evolve_skill_list to see promotable skill drafts, evolve_skill_promote to install one into the skill registry, evolve_rollback to undo a memory/skill commit (dry-run available), evolve_conflicts to list unresolved conflicts, and '
   + 'evolve_help to recall the command and safety surface.'
 
 const STATUS_VIEW_SCHEMA = {
@@ -204,6 +206,25 @@ const DRAFT_VIEW_SCHEMA = {
     whenToUse: { type: 'string', required: true },
     path: { type: 'string', required: true },
     content: { type: 'string', required: true },
+  },
+} as const
+
+const ROLLBACK_VIEW_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    dryRun: { type: 'boolean', required: true },
+    reverted: { type: 'boolean', required: true },
+    commit: { oneOf: [{ type: 'string' }, { type: 'null' }], required: true },
+    wouldChange: { type: 'array', required: true, items: { type: 'string' } },
+  },
+} as const
+
+const CONFLICTS_VIEW_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    conflicts: { type: 'array', required: true, items: { type: 'string' } },
   },
 } as const
 
@@ -315,7 +336,7 @@ export class GitEvolutionService extends Service {
     ctx.effect(() => ctx.commands.register({
       name: 'evolve',
       description: 'inspect or write Git-backed long-term memory',
-      input: { hint: 'connect|status|branches|remember <kind> <title> :: <content>|config show|open|refresh|set <key> <value>|skill draft|list|promote <name>|sync|help' },
+      input: { hint: 'connect|status|branches|remember <kind> <title> :: <content>|config show|open|refresh|set <key> <value>|skill draft|list|promote <name>|sync|rollback <ref> [--dry]|conflicts|help' },
       handler: invocation => this.runCommand(invocation),
     }), 'dsh-evolve-in-git: command')
     this.registerConfigRoute(ctx)
@@ -434,6 +455,32 @@ export class GitEvolutionService extends Service {
       },
       presentCall: args => ({ card: 'generic', title: 'Draft skill from ' + String(args.kind), kind: 'write', rawInput: args.title }),
     }))
+
+    ctx.tools.register(defineTool({
+      name: 'evolve_rollback',
+      description: 'Roll back one memory/skill commit in the evolve repository by reverting it (rejected unless the commit touches only memory/skills files). Use dryRun to preview without writing.',
+      parameters: {
+        ref: { type: 'string', required: true, description: 'Commit ref (hash or branch) to roll back.' },
+        dryRun: { type: 'boolean', description: 'Preview the change without writing (default false).' },
+      },
+      output: jsonOutput(ROLLBACK_VIEW_SCHEMA),
+      isConcurrencySafe: () => false,
+      execute: async (args) => {
+        const result = revertCommit(this.config, args.ref as string, args.dryRun === true)
+        return { dryRun: result.dryRun, reverted: result.reverted, commit: result.commit ?? null, wouldChange: result.wouldChange }
+      },
+      presentCall: args => ({ card: 'generic', title: 'Rollback ' + String(args.ref), kind: 'write' }),
+    }))
+
+    ctx.tools.register(defineTool({
+      name: 'evolve_conflicts',
+      description: 'List unresolved merge/rebase conflicts currently present in the evolve repository.',
+      parameters: {},
+      output: jsonOutput(CONFLICTS_VIEW_SCHEMA),
+      isConcurrencySafe: () => true,
+      execute: async () => ({ conflicts: listConflicts(connectRepository(this.config)) }),
+      presentCall: () => ({ card: 'generic', title: 'List evolve conflicts', kind: 'read' }),
+    }))
   }
 
   /**
@@ -544,6 +591,12 @@ export class GitEvolutionService extends Service {
       }
       if (input.startsWith('skill')) {
         return this.runSkillCommand(input.slice('skill'.length).trim())
+      }
+      if (input.startsWith('rollback')) {
+        return this.runRollbackCommand(input.slice('rollback'.length).trim())
+      }
+      if (input.startsWith('conflicts')) {
+        return this.runConflictsCommand()
       }
       const parsed = parseEvolveCommand(input)
       switch (parsed.kind) {
@@ -668,6 +721,37 @@ export class GitEvolutionService extends Service {
       }
       default:
         return { kind: 'error', text: 'Usage: /evolve skill draft <kind> <title> :: <content>|list|promote <name>|sync' }
+    }
+  }
+
+  private runRollbackCommand(rest: string): CommandResult {
+    const parts = rest.trim().split(/\s+/).filter(Boolean)
+    const ref = parts[0]
+    const dryRun = parts.includes('--dry')
+    if (ref === undefined) {
+      return { kind: 'error', text: 'Usage: /evolve rollback <ref> [--dry]' }
+    }
+    try {
+      const result = revertCommit(this.config, ref, dryRun)
+      const files = result.wouldChange.length === 0 ? '(none)' : result.wouldChange.join(', ')
+      if (result.dryRun) {
+        return { kind: 'success', text: 'Dry run: reverting ' + ref + ' would change:\n  ' + files }
+      }
+      return { kind: 'success', text: 'Reverted ' + ref + ' (' + files + ') -> ' + (result.commit ?? '') }
+    } catch (error) {
+      return { kind: 'error', text: userFacingError(error) }
+    }
+  }
+
+  private runConflictsCommand(): CommandResult {
+    try {
+      const conflicts = listConflicts(connectRepository(this.config))
+      if (conflicts.length === 0) {
+        return { kind: 'success', text: 'No unresolved conflicts.' }
+      }
+      return { kind: 'success', text: 'Unresolved conflicts:\n' + conflicts.map((path) => '- ' + path).join('\n') }
+    } catch (error) {
+      return { kind: 'error', text: userFacingError(error) }
     }
   }
 }

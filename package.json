@@ -1,6 +1,6 @@
 {
   "name": "dsh-evolve-in-git",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Git-backed long-term memory and evolution plugin for DeepSeek Harness",
   "private": false,
   "type": "module",

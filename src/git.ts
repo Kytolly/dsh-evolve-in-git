@@ -280,3 +280,57 @@ export function writeSkillDraft(config: ResolvedConfig, draft: SkillDraftInput):
     ...(rendered.tags === undefined ? {} : { tags: rendered.tags }),
   }
 }
+
+/** Conflict status codes git reports for an unmerged path (git status --porcelain). */
+const CONFLICT_CODES = /^(UU|AA|DD|AU|UA|DU|UD)/
+
+/**
+ * List the working-tree paths git currently reports as unmerged (a conflict from
+ * a merge/rebase/cherry-pick in progress on the memory repository).
+ */
+export function listConflicts(repoPath: string): string[] {
+  const porcelain = runGit(repoPath, ['status', '--porcelain'])
+  const conflicts: string[] = []
+  for (const line of porcelain.split(/\r?\n/).filter(Boolean)) {
+    if (CONFLICT_CODES.test(line.slice(0, 2))) conflicts.push(line.slice(3).replace(/\"/g, ''))
+  }
+  return conflicts
+}
+
+export interface RevertResult {
+  dryRun: boolean
+  reverted: boolean
+  commit: string | undefined
+  wouldChange: string[]
+}
+
+/**
+ * Roll back one memory/skill commit by reverting it. Only commits whose changes
+ * are entirely inside the memory and skills roots are accepted; anything else is
+ * rejected so the revert can never touch unrelated repo files. In dry-run mode
+ * nothing is written and the files that would change are returned.
+ */
+export function revertCommit(config: ResolvedConfig, ref: string, dryRun: boolean): RevertResult {
+  const repoPath = openRepository(config)
+  runGit(repoPath, ['rev-parse', '--verify', ref + '^{commit}'])
+  const changed = runGit(repoPath, ['show', '--format=', '--name-only', ref]).split(/\r?\n/).filter(Boolean)
+  const allowed = (path: string): boolean => {
+    return path === config.memoryRoot || path === config.skillsRoot
+      || path.startsWith(config.memoryRoot + '/') || path.startsWith(config.skillsRoot + '/')
+  }
+  const disallowed = changed.filter((path) => !allowed(path))
+  if (disallowed.length > 0) {
+    throw new GitEvolutionError('ref touches files outside the memory/skills roots: ' + disallowed.join(', '), 'REF_OUTSIDE_ROOTS')
+  }
+  if (dryRun) return { dryRun: true, reverted: false, commit: undefined, wouldChange: changed }
+  runGit(repoPath, ['revert', '--no-commit', ref])
+  const staged = runGit(repoPath, ['diff', '--cached', '--name-only']).split(/\r?\n/).filter(Boolean)
+  const stagedDisallowed = staged.filter((path) => !allowed(path))
+  if (stagedDisallowed.length > 0) {
+    runGit(repoPath, ['revert', '--abort'])
+    throw new GitEvolutionError('revert would touch files outside the memory/skills roots: ' + stagedDisallowed.join(', '), 'REF_OUTSIDE_ROOTS')
+  }
+  runGit(repoPath, ['commit', '--no-gpg-sign', '--message', 'revert(' + ref + '): ' + changed.join(', ')])
+  return { dryRun: false, reverted: true, commit: currentHead(repoPath), wouldChange: changed }
+}
+

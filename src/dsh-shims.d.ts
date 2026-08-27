@@ -46,6 +46,8 @@ declare module '@deepseek-ai/dsh-tools' {
     readonly branch: string | undefined
     readonly tags: readonly string[] | undefined
     readonly name: string | undefined
+    readonly ref: string | undefined
+    readonly dryRun: boolean | undefined
   }
 
   export function defineTool(definition: ToolDefinition): ToolDefinition
