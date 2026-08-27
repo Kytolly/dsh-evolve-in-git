@@ -1,10 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
-import { listConflicts, revertCommit } from '../lib/git.js'
+import { listConflicts, resolveConflict, revertCommit } from '../lib/git.js'
 import type { ResolvedConfig } from '../lib/types.js'
 
 function buildConfig(repoPath: string): ResolvedConfig {
@@ -81,6 +81,10 @@ test('listConflicts reports an in-progress merge conflict', () => {
     try { execFileSync('git', ['merge', 'feature'], { cwd: repo }) } catch { /* conflict expected */ }
     const conflicts = listConflicts(repo)
     assert.ok(conflicts.includes('.mem/shared.md'))
+    const resolved = resolveConflict(repo, '.mem/shared.md', 'ours')
+    assert.equal(resolved, '.mem/shared.md')
+    assert.equal(listConflicts(repo).includes('.mem/shared.md'), false)
+    assert.equal(readFileSync(join(repo, '.mem/shared.md'), 'utf8').trim(), 'main')
   } finally {
     try { execFileSync('git', ['merge', '--abort'], { cwd: repo }) } catch { /* ignore */ }
     try { rmSync(dir, { recursive: true, force: true }) } catch { /* Windows may hold the temp dir; leave it for the OS/cleanup */ }

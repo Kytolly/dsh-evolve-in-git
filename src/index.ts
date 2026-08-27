@@ -21,6 +21,7 @@ import {
   listBranches,
   listConflicts,
   pushBranch,
+  resolveConflict,
   revertCommit,
   writeMemoryRecord,
   writeSkillDraft,
@@ -228,6 +229,15 @@ const CONFLICTS_VIEW_SCHEMA = {
   },
 } as const
 
+const RESOLVE_VIEW_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    path: { type: 'string', required: true },
+    strategy: { type: 'string', required: true },
+  },
+} as const
+
 function jsonOutput(schema: unknown) {
   return {
     schema,
@@ -336,7 +346,7 @@ export class GitEvolutionService extends Service {
     ctx.effect(() => ctx.commands.register({
       name: 'evolve',
       description: 'inspect or write Git-backed long-term memory',
-      input: { hint: 'connect|status|branches|remember <kind> <title> :: <content>|config show|open|refresh|set <key> <value>|skill draft|list|promote <name>|sync|rollback <ref> [--dry]|conflicts|help' },
+      input: { hint: 'connect|status|branches|remember <kind> <title> :: <content>|config show|open|refresh|set <key> <value>|skill draft|list|promote <name>|sync|rollback <ref> [--dry]|conflicts|resolve <path> <ours|theirs|both>|help' },
       handler: invocation => this.runCommand(invocation),
     }), 'dsh-evolve-in-git: command')
     this.registerConfigRoute(ctx)
@@ -481,6 +491,19 @@ export class GitEvolutionService extends Service {
       execute: async () => ({ conflicts: listConflicts(connectRepository(this.config)) }),
       presentCall: () => ({ card: 'generic', title: 'List evolve conflicts', kind: 'read' }),
     }))
+
+    ctx.tools.register(defineTool({
+      name: 'evolve_resolve',
+      description: 'Resolve one unresolved conflict in the evolve repository by taking ours, theirs, or both sides, then staging it.',
+      parameters: {
+        path: { type: 'string', required: true, description: 'The conflicted path to resolve.' },
+        strategy: { type: 'string', required: true, enum: ['ours', 'theirs', 'both'], description: 'Resolution strategy: ours, theirs, or both.' },
+      },
+      output: jsonOutput(RESOLVE_VIEW_SCHEMA),
+      isConcurrencySafe: () => false,
+      execute: async (args) => ({ path: resolveConflict(connectRepository(this.config), args.path as string, args.strategy as 'ours' | 'theirs' | 'both'), strategy: String(args.strategy) }),
+      presentCall: args => ({ card: 'generic', title: 'Resolve conflict ' + String(args.path), kind: 'write' }),
+    }))
   }
 
   /**
@@ -597,6 +620,9 @@ export class GitEvolutionService extends Service {
       }
       if (input.startsWith('conflicts')) {
         return this.runConflictsCommand()
+      }
+      if (input.startsWith('resolve')) {
+        return this.runResolveCommand(input.slice('resolve'.length).trim())
       }
       const parsed = parseEvolveCommand(input)
       switch (parsed.kind) {
@@ -750,6 +776,21 @@ export class GitEvolutionService extends Service {
         return { kind: 'success', text: 'No unresolved conflicts.' }
       }
       return { kind: 'success', text: 'Unresolved conflicts:\n' + conflicts.map((path) => '- ' + path).join('\n') }
+    } catch (error) {
+      return { kind: 'error', text: userFacingError(error) }
+    }
+  }
+
+  private runResolveCommand(rest: string): CommandResult {
+    const parts = rest.trim().split(/\s+/).filter(Boolean)
+    const path = parts[0]
+    const strategy = parts[1] as 'ours' | 'theirs' | 'both' | undefined
+    if (path === undefined || strategy === undefined || ['ours', 'theirs', 'both'].includes(strategy) === false) {
+      return { kind: 'error', text: 'Usage: /evolve resolve <path> <ours|theirs|both>' }
+    }
+    try {
+      resolveConflict(connectRepository(this.config), path, strategy)
+      return { kind: 'success', text: 'Resolved ' + path + ' (' + strategy + ')' }
     } catch (error) {
       return { kind: 'error', text: userFacingError(error) }
     }

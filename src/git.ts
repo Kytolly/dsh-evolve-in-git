@@ -333,4 +333,26 @@ export function revertCommit(config: ResolvedConfig, ref: string, dryRun: boolea
   runGit(repoPath, ['commit', '--no-gpg-sign', '--message', 'revert(' + ref + '): ' + changed.join(', ')])
   return { dryRun: false, reverted: true, commit: currentHead(repoPath), wouldChange: changed }
 }
+export type ConflictStrategy = 'ours' | 'theirs' | 'both'
+
+/**
+ * Resolve one unresolved conflict by taking a side. 'ours'/'theirs' set the path
+ * to that side; 'both' combines both sides in the working tree (which may still
+ * contain merge markers if the sides cannot be reconciled). The path is then
+ * staged, removing it from the conflict set.
+ * @returns the resolved path.
+ */
+export function resolveConflict(repoPath: string, path: string, strategy: ConflictStrategy): string {
+  const conflicts = listConflicts(repoPath)
+  if (!conflicts.includes(path)) {
+    throw new GitEvolutionError("'" + path + "' is not an unresolved conflict", 'NOT_A_CONFLICT')
+  }
+  if (strategy === 'ours' || strategy === 'theirs') {
+    runGit(repoPath, ['checkout', '--' + strategy, '--', path])
+  } else {
+    runGit(repoPath, ['checkout', '--merge', '--', path])
+  }
+  runGit(repoPath, ['add', '--', path])
+  return path
+}
 
