@@ -78,7 +78,7 @@ The web Settings → 演进记忆 section also embeds a **config-file editor** t
 opens this file directly, edits it as raw JSON, and saves it through the
 loopback-only `/api/evolve-git/config` route (saves apply immediately).
 
-## Harness entry points (`v0.3.1`)
+## Harness entry points (`v0.5.0`)
 
 The plugin targets the current Harness `0.1.1-rc.2` host contracts for commands,
 tools, system prompt, and invariants (peerDependencies are `^0.1.1-rc.2`). Install it
@@ -96,6 +96,10 @@ Tools:
 - `evolve_rollback`
 - `evolve_conflicts`
 - `evolve_resolve`
+- `evolve_timeline`
+- `evolve_recall`
+- `evolve_branch_switch`
+- `evolve_branch_diff`
 - `evolve_help`
 
 Human command:
@@ -111,6 +115,9 @@ Human command:
 - `/evolve rollback <ref> [--dry]`
 - `/evolve conflicts`
 - `/evolve resolve <path> <ours|theirs|both>`
+- `/evolve timeline`
+- `/evolve search <q> [--kind k] [--tag t]`
+- `/evolve branch switch <name>` \| `/evolve branch diff <a> [b]` \| `/evolve branch revert <ref>`
 - `/evolve help`
 
 After installation, verify composition before starting a long-lived profile:
@@ -149,7 +156,7 @@ views, and automatic prompt injection are still later work.
 
 ## Limits
 
-- No automatic prompt injection yet.
+- Full per-turn automatic memory injection needs harness-level hooks; `evolve_recall` gives the model explicit recall-on-demand (semi-auto).
 - Branch switch/diff/revert and timeline views are still to come.
 - No automatic sync/pull of registered skills back into the memory repo.
 - No branch switch, diff, or revert command surface yet.

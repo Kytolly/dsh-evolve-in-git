@@ -11,10 +11,12 @@ import z from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import {
+  branchDiff,
   checkoutBranch as gitCheckoutBranch,
   connectRepository,
   createBranch as gitCreateBranch,
   currentBranch,
+  currentHead,
   ensureGitRepository,
   fetchRemote,
   gitStatus,
@@ -38,6 +40,7 @@ import {
 import { configFilePath, mergeConfig, readConfigFile, writeConfigFile } from './config.js'
 import { DEFAULT_AUTH, DEFAULT_BRANCH, DEFAULT_MEMORY_ROOT, DEFAULT_REMOTE, DEFAULT_REPO_PATH, DEFAULT_REPO_URL, DEFAULT_SKILLS_ROOT } from './defaults.js'
 import { listSkillDrafts, promoteSkillDraft, syncBundledSkills } from './skill.js'
+import { memoryTimeline, searchMemory } from './memory.js'
 import { makeConfigRoutes } from './config-route.js'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type {
@@ -114,6 +117,7 @@ const PROMPT_TEXT =
   'Use evolve_connect to verify the private memory repository, evolve_status to inspect branch and sync state, '
   + 'evolve_remember to persist a reusable memory note, evolve_branches to inspect local evolution branches, '
   + 'evolve_skill_draft to turn a memory into a skill draft, evolve_skill_list to see promotable skill drafts, evolve_skill_promote to install one into the skill registry, evolve_rollback to undo a memory/skill commit (dry-run available), evolve_conflicts to list unresolved conflicts, and '
+  + 'before a high-stakes step, use evolve_recall to surface relevant prior memory (or evolve_timeline to read the memory history) instead of asking the user to repeat it; and '
   + 'evolve_help to recall the command and safety surface.'
 
 const STATUS_VIEW_SCHEMA = {
@@ -238,6 +242,44 @@ const RESOLVE_VIEW_SCHEMA = {
   },
 } as const
 
+const MEMORY_ITEM_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    path: { type: 'string', required: true },
+    kind: { oneOf: [{ type: 'string' }, { type: 'null' }], required: true },
+    title: { oneOf: [{ type: 'string' }, { type: 'null' }], required: true },
+    branch: { oneOf: [{ type: 'string' }, { type: 'null' }], required: true },
+    source: { oneOf: [{ type: 'string' }, { type: 'null' }], required: true },
+    tags: { type: 'array', required: true, items: { type: 'string' } },
+    createdAt: { oneOf: [{ type: 'string' }, { type: 'null' }], required: true },
+    content: { type: 'string', required: true },
+  },
+} as const
+
+const TIMELINE_VIEW_SCHEMA = { type: 'array', items: MEMORY_ITEM_SCHEMA } as const
+const RECALL_VIEW_SCHEMA = { type: 'array', items: MEMORY_ITEM_SCHEMA } as const
+
+const BRANCH_DIFF_VIEW_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    refA: { type: 'string', required: true },
+    refB: { type: 'string', required: true },
+    stat: { type: 'string', required: true },
+    files: { type: 'array', required: true, items: { type: 'string' } },
+  },
+} as const
+
+const BRANCH_VIEW_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    branch: { type: 'string', required: true },
+    ref: { oneOf: [{ type: 'string' }, { type: 'null' }], required: true },
+  },
+} as const
+
 function jsonOutput(schema: unknown) {
   return {
     schema,
@@ -346,7 +388,7 @@ export class GitEvolutionService extends Service {
     ctx.effect(() => ctx.commands.register({
       name: 'evolve',
       description: 'inspect or write Git-backed long-term memory',
-      input: { hint: 'connect|status|branches|remember <kind> <title> :: <content>|config show|open|refresh|set <key> <value>|skill draft|list|promote <name>|sync|rollback <ref> [--dry]|conflicts|resolve <path> <ours|theirs|both>|help' },
+      input: { hint: 'connect|status|branches|remember <kind> <title> :: <content>|config show|open|refresh|set <key> <value>|skill draft|list|promote <name>|sync|rollback <ref> [--dry]|conflicts|resolve <path> <ours|theirs|both>|timeline|search <q>|branch switch|diff|revert <name|ref>|help' },
       handler: invocation => this.runCommand(invocation),
     }), 'dsh-evolve-in-git: command')
     this.registerConfigRoute(ctx)
@@ -504,6 +546,59 @@ export class GitEvolutionService extends Service {
       execute: async (args) => ({ path: resolveConflict(connectRepository(this.config), args.path as string, args.strategy as 'ours' | 'theirs' | 'both'), strategy: String(args.strategy) }),
       presentCall: args => ({ card: 'generic', title: 'Resolve conflict ' + String(args.path), kind: 'write' }),
     }))
+
+    ctx.tools.register(defineTool({
+      name: 'evolve_timeline',
+      description: 'List the memory records in the evolve repository in chronological order (newest first).',
+      parameters: {},
+      output: jsonOutput(TIMELINE_VIEW_SCHEMA),
+      isConcurrencySafe: () => true,
+      execute: async () => memoryTimeline(this.config),
+      presentCall: () => ({ card: 'generic', title: 'Read evolve memory timeline', kind: 'read' }),
+    }))
+
+    ctx.tools.register(defineTool({
+      name: 'evolve_recall',
+      description: 'Search the evolve memory for records matching a keyword, optionally filtered by kind or tag. Use to surface prior decisions or lessons without re-asking the user.',
+      parameters: {
+        query: { type: 'string', description: 'Keyword to match against title/content/tags/kind.' },
+        kind: { type: 'string', description: 'Optional memory kind filter (session/skill/warning/persona/note).' },
+        tag: { type: 'string', description: 'Optional tag filter.' },
+      },
+      output: jsonOutput(RECALL_VIEW_SCHEMA),
+      isConcurrencySafe: () => true,
+      execute: async (args) => searchMemory(this.config, { ...(args.query === undefined ? {} : { query: args.query }), ...(args.kind === undefined ? {} : { kind: args.kind }), ...(args.tag === undefined ? {} : { tag: args.tag }) }),
+      presentCall: args => ({ card: 'generic', title: 'Recall evolve memory' + (args.query === undefined ? '' : ': ' + String(args.query)), kind: 'read' }),
+    }))
+
+    ctx.tools.register(defineTool({
+      name: 'evolve_branch_switch',
+      description: 'Switch the evolve repository to a memory branch.',
+      parameters: {
+        name: { type: 'string', required: true, description: 'Branch name to switch to.' },
+      },
+      output: jsonOutput(BRANCH_VIEW_SCHEMA),
+      isConcurrencySafe: () => false,
+      execute: async (args) => {
+        const repoPath = connectRepository(this.config)
+        gitCheckoutBranch(repoPath, args.name as string)
+        return { branch: currentBranch(repoPath), ref: currentHead(repoPath) ?? null }
+      },
+      presentCall: args => ({ card: 'generic', title: 'Switch branch ' + String(args.name), kind: 'write' }),
+    }))
+
+    ctx.tools.register(defineTool({
+      name: 'evolve_branch_diff',
+      description: 'Diff two branches/refs (or one ref against HEAD) in the evolve repository and list the changed memory/skill files.',
+      parameters: {
+        a: { type: 'string', required: true, description: 'First ref.' },
+        b: { type: 'string', description: 'Second ref (default HEAD).' },
+      },
+      output: jsonOutput(BRANCH_DIFF_VIEW_SCHEMA),
+      isConcurrencySafe: () => true,
+      execute: async (args) => branchDiff(connectRepository(this.config), args.a as string, args.b),
+      presentCall: args => ({ card: 'generic', title: 'Diff ' + String(args.a), kind: 'read' }),
+    }))
   }
 
   /**
@@ -623,6 +718,15 @@ export class GitEvolutionService extends Service {
       }
       if (input.startsWith('resolve')) {
         return this.runResolveCommand(input.slice('resolve'.length).trim())
+      }
+      if (input.startsWith('timeline')) {
+        return this.runTimelineCommand()
+      }
+      if (input.startsWith('search')) {
+        return this.runSearchCommand(input.slice('search'.length).trim())
+      }
+      if (input.startsWith('branch')) {
+        return this.runBranchCommand(input.slice('branch'.length).trim())
       }
       const parsed = parseEvolveCommand(input)
       switch (parsed.kind) {
@@ -794,6 +898,69 @@ export class GitEvolutionService extends Service {
     } catch (error) {
       return { kind: 'error', text: userFacingError(error) }
     }
+  }
+
+  private runTimelineCommand(): CommandResult {
+    const timeline = memoryTimeline(this.config)
+    if (timeline.length === 0) return { kind: 'success', text: 'No memory records yet.' }
+    return {
+      kind: 'success',
+      text: timeline.map((memo) => '- ' + (memo.createdAt ?? '?') + '  [' + (memo.kind ?? '?') + ']  ' + (memo.title ?? memo.path)).join('\n'),
+    }
+  }
+
+  private runSearchCommand(rest: string): CommandResult {
+    const parts = rest.trim().split(/\s+/).filter(Boolean)
+    let kind: string | undefined
+    let tag: string | undefined
+    const words: string[] = []
+    for (let i = 0; i < parts.length; i++) {
+      const tok = parts[i] as string
+      if (tok === '--kind') { kind = parts[i + 1]; i += 1 }
+      else if (tok === '--tag') { tag = parts[i + 1]; i += 1 }
+      else words.push(tok)
+    }
+    const filter: { query?: string; kind?: string; tag?: string } = {}
+    if (words.length > 0) filter.query = words.join(' ')
+    if (kind !== undefined) filter.kind = kind
+    if (tag !== undefined) filter.tag = tag
+    const results = searchMemory(this.config, filter)
+    if (results.length === 0) return { kind: 'success', text: 'No matching memory.' }
+    return {
+      kind: 'success',
+      text: results.map((memo) => '- [' + (memo.kind ?? '?') + '] ' + (memo.title ?? memo.path) + (memo.createdAt === undefined ? '' : '  @' + memo.createdAt)).join('\n'),
+    }
+  }
+
+  private runBranchCommand(rest: string): CommandResult {
+    const parts = rest.trim().split(/\s+/).filter(Boolean)
+    const sub = parts[0]
+    const name = parts[1]
+    if (sub === 'switch') {
+      if (name === undefined) return { kind: 'error', text: 'Usage: /evolve branch switch <name>' }
+      try {
+        const repoPath = connectRepository(this.config)
+        gitCheckoutBranch(repoPath, name)
+        return { kind: 'success', text: 'Switched to ' + currentBranch(repoPath) + ' @ ' + (currentHead(repoPath) ?? '') }
+      } catch (error) { return { kind: 'error', text: userFacingError(error) } }
+    }
+    if (sub === 'diff') {
+      const a = parts[1]
+      const b = parts[2]
+      if (a === undefined) return { kind: 'error', text: 'Usage: /evolve branch diff <a> [b]' }
+      try {
+        const result = branchDiff(connectRepository(this.config), a, b)
+        return { kind: 'success', text: 'Diff ' + result.refA + '..' + result.refB + '\n' + result.stat + (result.files.length === 0 ? '' : '\n' + result.files.join('\n')) }
+      } catch (error) { return { kind: 'error', text: userFacingError(error) } }
+    }
+    if (sub === 'revert') {
+      if (name === undefined) return { kind: 'error', text: 'Usage: /evolve branch revert <ref>' }
+      try {
+        const result = revertCommit(this.config, name, false)
+        return { kind: 'success', text: 'Reverted ' + name + ' -> ' + (result.commit ?? '') }
+      } catch (error) { return { kind: 'error', text: userFacingError(error) } }
+    }
+    return { kind: 'error', text: 'Usage: /evolve branch switch|diff|revert <name|ref>' }
   }
 }
 

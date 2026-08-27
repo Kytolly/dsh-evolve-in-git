@@ -1,6 +1,6 @@
 # dsh-evolve-in-git Roadmap
 
-> 状态：**已停止开发（最终版 0.3.1）**。经与 [dsh-memory-evolve](https://github.com/csyangwen/dsh-memory-evolve) 对比，本插件的剩余路线图已由其完全覆盖，故转为维护/存档。
+> 状态：**开发仍在继续（当前 0.5.0）**。0.4.0（分支/时间线）、0.5.0（召回/半自动注入）已实现。早期曾评估以 [dsh-memory-evolve](https://github.com/csyangwen/dsh-memory-evolve) 替代，但按后续要求本仓库继续完善；两者定位不同（独立记忆仓库 vs 一体化记忆+调度）。
 
 ---
 

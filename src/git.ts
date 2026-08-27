@@ -355,4 +355,22 @@ export function resolveConflict(repoPath: string, path: string, strategy: Confli
   runGit(repoPath, ['add', '--', path])
   return path
 }
+export interface BranchDiffResult {
+  refA: string
+  refB: string
+  stat: string
+  files: string[]
+}
+
+/**
+ * Diff the working tree (or two branch/commit refs) in the memory repository.
+ * Returns the stat line plus the changed file list so the agent can compare
+ * memory/skill changes across branches.
+ */
+export function branchDiff(repoPath: string, a: string, b?: string): BranchDiffResult {
+  const refB = b ?? 'HEAD'
+  const stat = runGit(repoPath, ['diff', '--stat', a, refB]).trim()
+  const files = runGit(repoPath, ['diff', '--name-only', a, refB]).split(/\r?\n/).filter(Boolean)
+  return { refA: a, refB, stat, files }
+}
 
