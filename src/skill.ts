@@ -8,7 +8,8 @@
  * @module dsh-evolve-in-git/skill
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { dshSkillsRoot } from './config.js'
 import type { ResolvedConfig } from './types.js'
 
@@ -105,4 +106,43 @@ export function promoteSkillDraft(config: ResolvedConfig, name: string): Promote
   mkdirSync(join(targetRoot, fm.name), { recursive: true })
   writeFileSync(target, content, 'utf8')
   return { name: fm.name, description: fm.description, path: source, targetPath: target }
+}
+
+/** The bundled skill directory inside the installed package. */
+function packageRoot(): string {
+  return join(dirname(fileURLToPath(import.meta.url)), '..')
+}
+
+/**
+ * Materialize the skills shipped in this package (skills/<name>/SKILL.md) into
+ * the DSH user skills root (~/.dsh/skills) so they are discovered and callable.
+ *
+ * By default (force=false) this only creates missing skills so a user's edits are
+ * never clobbered; with force=true it overwrites them with the bundled version
+ * (how a newer release propagates an updated skill).
+ * @returns one summary per bundled skill, in discovery order.
+ */
+export function syncBundledSkills(force = false): { name: string; targetPath: string; action: 'created' | 'updated' | 'skipped' }[] {
+  const bundledRoot = join(packageRoot(), 'skills')
+  if (!existsSync(bundledRoot)) return []
+  const targetRoot = dshSkillsRoot()
+  const results: { name: string; targetPath: string; action: 'created' | 'updated' | 'skipped' }[] = []
+  for (const entry of readdirSync(bundledRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue
+    const src = join(bundledRoot, entry.name, 'SKILL.md')
+    if (!existsSync(src)) continue
+    const target = join(targetRoot, entry.name, 'SKILL.md')
+    const content = readFileSync(src, 'utf8')
+    let action: 'created' | 'updated' | 'skipped' = 'skipped'
+    if (!existsSync(target)) {
+      mkdirSync(join(targetRoot, entry.name), { recursive: true })
+      writeFileSync(target, content, 'utf8')
+      action = 'created'
+    } else if (force) {
+      writeFileSync(target, content, 'utf8')
+      action = 'updated'
+    }
+    results.push({ name: entry.name, targetPath: target, action })
+  }
+  return results
 }

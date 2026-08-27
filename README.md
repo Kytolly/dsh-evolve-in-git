@@ -78,7 +78,7 @@ The web Settings → 演进记忆 section also embeds a **config-file editor** t
 opens this file directly, edits it as raw JSON, and saves it through the
 loopback-only `/api/evolve-git/config` route (saves apply immediately).
 
-## Harness entry points (`v0.2.0`)
+## Harness entry points (`v0.2.1`)
 
 The plugin targets the current Harness `0.1.1-rc.2` host contracts for commands,
 tools, system prompt, and invariants (peerDependencies are `^0.1.1-rc.2`). Install it
@@ -90,6 +90,7 @@ Tools:
 - `evolve_status`
 - `evolve_remember`
 - `evolve_branches`
+- `evolve_skill_draft`
 - `evolve_skill_list`
 - `evolve_skill_promote`
 - `evolve_help`
@@ -100,8 +101,10 @@ Human command:
 - `/evolve status`
 - `/evolve branches`
 - `/evolve remember <kind> <title> :: <content>`
+- `/evolve skill draft <kind> <title> :: <content>`
 - `/evolve skill list`
 - `/evolve skill promote <name>`
+- `/evolve skill sync`
 - `/evolve help`
 
 After installation, verify composition before starting a long-lived profile:
@@ -114,6 +117,13 @@ dsh --profile web
 The first command should show the `evolve-git` row from the plugin bundle. The
 second command boots the profile; once loaded, the model sees the
 `evolve_*` tools and the UI command registry exposes `/evolve`.
+
+### Bundled skills
+
+The package ships the `evolve-process` skill under `skills/`. On load the plugin
+materializes it into `~/.dsh/skills/evolve-process/` (creating it only when
+missing, so your edits are never clobbered); `/evolve skill sync` overwrites the
+bundled copy on demand. It is then callable as a normal DSH skill.
 
 ## Browser half (`v0.1.4+`)
 

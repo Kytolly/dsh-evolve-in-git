@@ -34,7 +34,7 @@ import {
 } from './harness.js'
 import { configFilePath, mergeConfig, readConfigFile, writeConfigFile } from './config.js'
 import { DEFAULT_AUTH, DEFAULT_BRANCH, DEFAULT_MEMORY_ROOT, DEFAULT_REMOTE, DEFAULT_REPO_PATH, DEFAULT_REPO_URL, DEFAULT_SKILLS_ROOT } from './defaults.js'
-import { listSkillDrafts, promoteSkillDraft } from './skill.js'
+import { listSkillDrafts, promoteSkillDraft, syncBundledSkills } from './skill.js'
 import { makeConfigRoutes } from './config-route.js'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type {
@@ -110,7 +110,7 @@ export interface Config {
 const PROMPT_TEXT =
   'Use evolve_connect to verify the private memory repository, evolve_status to inspect branch and sync state, '
   + 'evolve_remember to persist a reusable memory note, evolve_branches to inspect local evolution branches, '
-  + 'evolve_skill_list to see promotable skill drafts, evolve_skill_promote to install one into the skill registry, and '
+  + 'evolve_skill_draft to turn a memory into a skill draft, evolve_skill_list to see promotable skill drafts, evolve_skill_promote to install one into the skill registry, and '
   + 'evolve_help to recall the command and safety surface.'
 
 const STATUS_VIEW_SCHEMA = {
@@ -192,6 +192,18 @@ const PROMOTE_VIEW_SCHEMA = {
     description: { type: 'string', required: true },
     path: { type: 'string', required: true },
     targetPath: { type: 'string', required: true },
+  },
+} as const
+
+const DRAFT_VIEW_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    name: { type: 'string', required: true },
+    description: { type: 'string', required: true },
+    whenToUse: { type: 'string', required: true },
+    path: { type: 'string', required: true },
+    content: { type: 'string', required: true },
   },
 } as const
 
@@ -293,6 +305,7 @@ export class GitEvolutionService extends Service {
     super(ctx, 'evolveGit')
     this.baseConfig = config
     this.config = resolveConfig(mergeConfig(config, readConfigFile()) as Config)
+    try { syncBundledSkills(false) } catch { /* best-effort: materialize bundled skills, never block load */ }
     ctx.systemPrompt.section({
       name: 'tool:evolve-git',
       order: 116,
@@ -302,7 +315,7 @@ export class GitEvolutionService extends Service {
     ctx.effect(() => ctx.commands.register({
       name: 'evolve',
       description: 'inspect or write Git-backed long-term memory',
-      input: { hint: 'connect|status|branches|remember <kind> <title> :: <content>|config show|open|refresh|set <key> <value>|skill list|promote <name>|help' },
+      input: { hint: 'connect|status|branches|remember <kind> <title> :: <content>|config show|open|refresh|set <key> <value>|skill draft|list|promote <name>|sync|help' },
       handler: invocation => this.runCommand(invocation),
     }), 'dsh-evolve-in-git: command')
     this.registerConfigRoute(ctx)
@@ -402,6 +415,24 @@ export class GitEvolutionService extends Service {
       isConcurrencySafe: () => false,
       execute: async (args) => promoteSkillDraft(this.config, args.name as string),
       presentCall: args => ({ card: 'generic', title: 'Promote skill ' + String(args.name), kind: 'write' }),
+    }))
+
+    ctx.tools.register(defineTool({
+      name: 'evolve_skill_draft',
+      description: 'Create a skill draft from a memory record, writing it into the evolve memory repo so it can be reviewed and then promoted into the skill registry.',
+      parameters: {
+        kind: { type: 'string', required: true, enum: ['session', 'skill', 'warning', 'persona', 'note'], description: 'Memory kind to draft from.' },
+        title: { type: 'string', required: true, description: 'Short memory title.' },
+        content: { type: 'string', required: true, description: 'Reusable lesson or rule to encode as a skill.' },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Optional skill tags.' },
+      },
+      output: jsonOutput(DRAFT_VIEW_SCHEMA),
+      isConcurrencySafe: () => false,
+      execute: async (args) => {
+        const draft = await this.saveSkillDraft(draftSkillFromRecord({ kind: args.kind as MemoryKind, title: args.title, content: args.content, ...(args.tags === undefined ? {} : { tags: args.tags }) }))
+        return { name: draft.name, description: draft.description, whenToUse: draft.whenToUse, path: draft.path, content: draft.content }
+      },
+      presentCall: args => ({ card: 'generic', title: 'Draft skill from ' + String(args.kind), kind: 'write', rawInput: args.title }),
     }))
   }
 
@@ -582,7 +613,7 @@ export class GitEvolutionService extends Service {
     }
   }
 
-  private runSkillCommand(rest: string): CommandResult {
+  private async runSkillCommand(rest: string): Promise<CommandResult> {
     const parts = rest.trim().split(/\s+/).filter(Boolean)
     const cmd = parts[0] ?? 'list'
     switch (cmd) {
@@ -613,8 +644,30 @@ export class GitEvolutionService extends Service {
           return { kind: 'error', text: userFacingError(error) }
         }
       }
+      case 'draft': {
+        const draftArgs = rest.slice('draft'.length).trim()
+        const parsed = parseEvolveCommand('remember ' + draftArgs)
+        if (parsed.kind !== 'remember') {
+          return { kind: 'error', text: 'Usage: /evolve skill draft <kind> <title> :: <content>' }
+        }
+        try {
+          const draft = await this.saveSkillDraft(draftSkillFromRecord(parsed.record))
+          return { kind: 'success', text: 'Drafted skill "' + draft.name + '" -> ' + draft.path }
+        } catch (error) {
+          return { kind: 'error', text: userFacingError(error) }
+        }
+      }
+      case 'sync': {
+        const synced = syncBundledSkills(true)
+        return {
+          kind: 'success',
+          text: 'Synced bundled skills:\n' + (synced.length === 0
+            ? '  (bundled skills not found in this package)'
+            : synced.map(item => '- ' + item.name + ' (' + item.action + ') -> ' + item.targetPath).join('\n')),
+        }
+      }
       default:
-        return { kind: 'error', text: 'Usage: /evolve skill list|promote <name>' }
+        return { kind: 'error', text: 'Usage: /evolve skill draft <kind> <title> :: <content>|list|promote <name>|sync' }
     }
   }
 }
