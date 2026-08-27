@@ -34,6 +34,7 @@ import {
 } from './harness.js'
 import { configFilePath, mergeConfig, readConfigFile, writeConfigFile } from './config.js'
 import { DEFAULT_AUTH, DEFAULT_BRANCH, DEFAULT_MEMORY_ROOT, DEFAULT_REMOTE, DEFAULT_REPO_PATH, DEFAULT_REPO_URL, DEFAULT_SKILLS_ROOT } from './defaults.js'
+import { listSkillDrafts, promoteSkillDraft } from './skill.js'
 import { makeConfigRoutes } from './config-route.js'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type {
@@ -108,7 +109,8 @@ export interface Config {
 
 const PROMPT_TEXT =
   'Use evolve_connect to verify the private memory repository, evolve_status to inspect branch and sync state, '
-  + 'evolve_remember to persist a reusable memory note, evolve_branches to inspect local evolution branches, and '
+  + 'evolve_remember to persist a reusable memory note, evolve_branches to inspect local evolution branches, '
+  + 'evolve_skill_list to see promotable skill drafts, evolve_skill_promote to install one into the skill registry, and '
   + 'evolve_help to recall the command and safety surface.'
 
 const STATUS_VIEW_SCHEMA = {
@@ -166,6 +168,30 @@ const HELP_VIEW_SCHEMA = {
     tools: { type: 'array', required: true, items: { type: 'string' } },
     usage: { type: 'array', required: true, items: { type: 'string' } },
     safety: { type: 'array', required: true, items: { type: 'string' } },
+  },
+} as const
+
+const SKILL_LIST_VIEW_SCHEMA = {
+  type: 'array',
+  items: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      name: { type: 'string', required: true },
+      description: { type: 'string', required: true },
+      path: { type: 'string', required: true },
+    },
+  },
+} as const
+
+const PROMOTE_VIEW_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    name: { type: 'string', required: true },
+    description: { type: 'string', required: true },
+    path: { type: 'string', required: true },
+    targetPath: { type: 'string', required: true },
   },
 } as const
 
@@ -276,7 +302,7 @@ export class GitEvolutionService extends Service {
     ctx.effect(() => ctx.commands.register({
       name: 'evolve',
       description: 'inspect or write Git-backed long-term memory',
-      input: { hint: 'connect|status|branches|remember <kind> <title> :: <content>|config show|open|refresh|set <key> <value>|help' },
+      input: { hint: 'connect|status|branches|remember <kind> <title> :: <content>|config show|open|refresh|set <key> <value>|skill list|promote <name>|help' },
       handler: invocation => this.runCommand(invocation),
     }), 'dsh-evolve-in-git: command')
     this.registerConfigRoute(ctx)
@@ -354,6 +380,28 @@ export class GitEvolutionService extends Service {
       isConcurrencySafe: () => true,
       execute: async () => this.helpView(),
       presentCall: () => ({ card: 'generic', title: 'Read evolve help', kind: 'read' }),
+    }))
+
+    ctx.tools.register(defineTool({
+      name: 'evolve_skill_list',
+      description: 'List skill drafts in the evolve memory repo that can be promoted into the DSH skill registry.',
+      parameters: {},
+      output: jsonOutput(SKILL_LIST_VIEW_SCHEMA),
+      isConcurrencySafe: () => true,
+      execute: async () => listSkillDrafts(this.config),
+      presentCall: () => ({ card: 'generic', title: 'List evolve skill drafts', kind: 'read' }),
+    }))
+
+    ctx.tools.register(defineTool({
+      name: 'evolve_skill_promote',
+      description: 'Promote one skill draft into the DSH skill registry by its name, making it callable as a normal DSH skill.',
+      parameters: {
+        name: { type: 'string', required: true, description: 'Skill draft name (kebab-case) to promote.' },
+      },
+      output: jsonOutput(PROMOTE_VIEW_SCHEMA),
+      isConcurrencySafe: () => false,
+      execute: async (args) => promoteSkillDraft(this.config, args.name as string),
+      presentCall: args => ({ card: 'generic', title: 'Promote skill ' + String(args.name), kind: 'write' }),
     }))
   }
 
@@ -463,6 +511,9 @@ export class GitEvolutionService extends Service {
       if (input.startsWith('config')) {
         return this.runConfigCommand(input.slice('config'.length).trim())
       }
+      if (input.startsWith('skill')) {
+        return this.runSkillCommand(input.slice('skill'.length).trim())
+      }
       const parsed = parseEvolveCommand(input)
       switch (parsed.kind) {
         case 'connect':
@@ -528,6 +579,42 @@ export class GitEvolutionService extends Service {
       }
       default:
         return { kind: 'error', text: 'Usage: /evolve config show|open|refresh|set <key> <value>' }
+    }
+  }
+
+  private runSkillCommand(rest: string): CommandResult {
+    const parts = rest.trim().split(/\s+/).filter(Boolean)
+    const cmd = parts[0] ?? 'list'
+    switch (cmd) {
+      case 'list': {
+        const drafts = listSkillDrafts(this.config)
+        if (drafts.length === 0) {
+          return { kind: 'success', text: 'No skill drafts to promote.' }
+        }
+        return {
+          kind: 'success',
+          text: [
+            'Promotable skill drafts in ' + join(this.config.repoPath, this.config.skillsRoot) + ':',
+            ...drafts.map(draft => '- ' + draft.name + ' :: ' + draft.description),
+            '',
+            'Promote one with: /evolve skill promote <name>',
+          ].join('\n'),
+        }
+      }
+      case 'promote': {
+        const name = parts[1]
+        if (name === undefined) {
+          return { kind: 'error', text: 'Usage: /evolve skill promote <name>' }
+        }
+        try {
+          const promoted = promoteSkillDraft(this.config, name)
+          return { kind: 'success', text: 'Promoted skill "' + promoted.name + '" -> ' + promoted.targetPath }
+        } catch (error) {
+          return { kind: 'error', text: userFacingError(error) }
+        }
+      }
+      default:
+        return { kind: 'error', text: 'Usage: /evolve skill list|promote <name>' }
     }
   }
 }

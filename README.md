@@ -78,7 +78,7 @@ The web Settings → 演进记忆 section also embeds a **config-file editor** t
 opens this file directly, edits it as raw JSON, and saves it through the
 loopback-only `/api/evolve-git/config` route (saves apply immediately).
 
-## Harness entry points (`v0.1.3`)
+## Harness entry points (`v0.2.0`)
 
 The plugin targets the current Harness `0.1.1-rc.2` host contracts for commands,
 tools, system prompt, and invariants (peerDependencies are `^0.1.1-rc.2`). Install it
@@ -90,6 +90,8 @@ Tools:
 - `evolve_status`
 - `evolve_remember`
 - `evolve_branches`
+- `evolve_skill_list`
+- `evolve_skill_promote`
 - `evolve_help`
 
 Human command:
@@ -98,6 +100,8 @@ Human command:
 - `/evolve status`
 - `/evolve branches`
 - `/evolve remember <kind> <title> :: <content>`
+- `/evolve skill list`
+- `/evolve skill promote <name>`
 - `/evolve help`
 
 After installation, verify composition before starting a long-lived profile:
@@ -108,7 +112,7 @@ dsh --profile web
 ```
 
 The first command should show the `evolve-git` row from the plugin bundle. The
-second command boots the profile; once loaded, the model sees the five
+second command boots the profile; once loaded, the model sees the
 `evolve_*` tools and the UI command registry exposes `/evolve`.
 
 ## Browser half (`v0.1.4+`)
@@ -122,13 +126,14 @@ second command boots the profile; once loaded, the model sees the five
 
 ## Current slice
 
-`v0.1.4` makes the plugin directly usable from Harness and adds the web
-settings UI.
-It adds the first tool and command surfaces, but still leaves skill-promotion strategy, safe rollback, sync reminders, and timeline views for later versions.
+`v0.2.0` adds the first tool and command surfaces plus the web settings UI,
+and wires skill-draft promotion into the DSH skill registry
+(`/evolve skill list|promote`). Safe rollback, sync reminders, timeline
+views, and automatic prompt injection are still later work.
 
 ## Limits
 
 - No automatic prompt injection yet.
 - No merge/conflict resolver yet.
-- No sync to the DSH skill registry yet.
+- No automatic sync/pull of registered skills back into the memory repo.
 - No branch switch, diff, or revert command surface yet.

@@ -30,10 +30,8 @@ jobs:
       - name: Test
         run: pnpm test
 
-      - name: Verify lib is committed & current
+      - name: Verify build artifacts
         run: |
-          if ! git diff --exit-code -- lib; then
-            echo "::error::lib/ is stale. Run 'pnpm build' and commit lib/ so a github install ships its entry files."
-            exit 1
-          fi
-          echo "lib/ is committed and in sync with src."
+          # lib/ is git-ignored and produced by the 'prepare' step on install;
+          # CI just confirms the bundle built and is present.
+          test -f lib/index.js && test -f lib/client.js && echo "build artifacts present"

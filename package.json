@@ -1,6 +1,6 @@
 {
   "name": "dsh-evolve-in-git",
-  "version": "0.1.7",
+  "version": "0.2.0",
   "description": "Git-backed long-term memory and evolution plugin for DeepSeek Harness",
   "private": false,
   "type": "module",
@@ -48,6 +48,10 @@
     "./config": {
       "types": "./lib/types/config.d.ts",
       "default": "./lib/config.js"
+    },
+    "./skill": {
+      "types": "./lib/types/skill.d.ts",
+      "default": "./lib/skill.js"
     },
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"

@@ -29,10 +29,19 @@ export interface ConfigFile {
   autoCommit?: boolean
 }
 
+/** DSH home directory (`DSH_HOME` env, else `~/.dsh`). */
+export function dshHome(): string {
+  return process.env['DSH_HOME']?.trim() || join(homedir(), '.dsh')
+}
+
+/** DSH user skills root the filesystem skill provider discovers skills from. */
+export function dshSkillsRoot(): string {
+  return join(dshHome(), 'skills')
+}
+
 /** Path to the user-facing config file. */
 export function configFilePath(): string {
-  const home = process.env['DSH_HOME']?.trim() || join(homedir(), '.dsh')
-  return join(home, 'evolve-in-git.json')
+  return join(dshHome(), 'evolve-in-git.json')
 }
 
 /** Read the config file if it exists; return an empty object otherwise. */
