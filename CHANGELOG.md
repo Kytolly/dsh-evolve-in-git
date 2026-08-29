@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.6.3 — Fix lossless JSON for timeline/recall/show
+
+- `evolve_timeline` / `evolve_recall` / `memory_search` / `evolve_show` now sanitize `undefined` record fields to `null` before returning, so the host JSON binding no longer rejects results as not-lossless JSON.
+- `MEMORY_ITEM_SCHEMA` now includes `id/updatedAt/status/sensitivity/supersedes/supersededBy/expiresAt`.
+- Regression test added in `tests/adapter-mapping.spec.ts`.
+
 ## v0.6.2 — Publish missing lib/ build artifacts
 
 - Force-include `lib/` artifacts so `github:` installs can resolve `lib/core.js`, `lib/memory-index.js`, `lib/update.js`, `lib/forget.js`, and `lib/privacy.js`.

@@ -22,6 +22,8 @@ declare module '@deepseek-ai/cordis' {
         evolveGit: GitEvolutionService;
     }
 }
+/** Replace undefined values with null so the host JSON binding accepts the result losslessly. */
+export declare function lossless(value: object): Record<string, unknown>;
 /**
  * Runtime service for Git-backed memory, branch evolution, Harness tools, and a human command.
  */

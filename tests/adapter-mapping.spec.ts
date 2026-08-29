@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { GitEvolutionService } from '../src/index.js'
+import { GitEvolutionService, lossless } from '../src/index.js'
 import { defineTool } from './dsh-tools-stub.js'
 
 /** Every evolve_* tool the adapter must register, in alphabetical order. */
@@ -49,6 +49,12 @@ function makeStubContext() {
   }
   return { ctx, tools, commands }
 }
+
+test('lossless replaces undefined values with null for host JSON binding', () => {
+  const out = lossless({ path: 'a', id: undefined, status: undefined, tags: [] })
+  assert.deepEqual(out, { path: 'a', id: null, status: null, tags: [] })
+  assert.equal(JSON.stringify(out), '{"path":"a","id":null,"status":null,"tags":[]}')
+})
 
 test('the local dsh-tools stub provides an identity defineTool', () => {
   const def = { name: 'probe', execute: () => 'x' }

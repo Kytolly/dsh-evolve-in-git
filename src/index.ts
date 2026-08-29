@@ -226,6 +226,13 @@ const MEMORY_ITEM_SCHEMA = {
     source: { oneOf: [{ type: 'string' }, { type: 'null' }], required: true },
     tags: { type: 'array', required: true, items: { type: 'string' } },
     createdAt: { oneOf: [{ type: 'string' }, { type: 'null' }], required: true },
+    updatedAt: { oneOf: [{ type: 'string' }, { type: 'null' }], required: true },
+    id: { oneOf: [{ type: 'string' }, { type: 'null' }], required: true },
+    status: { oneOf: [{ type: 'string' }, { type: 'null' }], required: true },
+    sensitivity: { oneOf: [{ type: 'string' }, { type: 'null' }], required: true },
+    supersedes: { oneOf: [{ type: 'string' }, { type: 'null' }], required: true },
+    supersededBy: { oneOf: [{ type: 'string' }, { type: 'null' }], required: true },
+    expiresAt: { oneOf: [{ type: 'string' }, { type: 'null' }], required: true },
     content: { type: 'string', required: true },
   },
 } as const
@@ -310,6 +317,14 @@ const EXPORT_VIEW_SCHEMA = {
     text: { type: 'string', required: true },
   },
 } as const
+
+/** Replace undefined values with null so the host JSON binding accepts the result losslessly. */
+export function lossless(value: object): Record<string, unknown> {
+  const record = value as Record<string, unknown>
+  const out: Record<string, unknown> = {}
+  for (const key of Object.keys(record)) out[key] = record[key] === undefined ? null : record[key]
+  return out
+}
 
 function jsonOutput(schema: unknown) {
   return {
@@ -583,9 +598,9 @@ export class GitEvolutionService extends Service {
       output: jsonOutput(SHOW_VIEW_SCHEMA),
       isConcurrencySafe: () => true,
       execute: async (args) => {
-        const record = this.core.show(args.id as string)
-        if (record === undefined) throw new Error("no memory record with id '" + args.id + "'")
-        return record
+        const found = this.core.show(args.id as string)
+        if (found === undefined) throw new Error("no memory record with id '" + args.id + "'")
+        return lossless(found)
       },
       presentCall: args => ({ card: 'generic', title: 'Show memory ' + String(args.id), kind: 'read' }),
     }))
@@ -729,7 +744,7 @@ export class GitEvolutionService extends Service {
       parameters: {},
       output: jsonOutput(TIMELINE_VIEW_SCHEMA),
       isConcurrencySafe: () => true,
-      execute: async () => this.core.timeline(),
+      execute: async () => this.core.timeline().map((record) => lossless(record)),
       presentCall: () => ({ card: 'generic', title: 'Read evolve memory timeline', kind: 'read' }),
     }))
 
@@ -750,7 +765,7 @@ export class GitEvolutionService extends Service {
       execute: async (args) => this.core.recall(
         { ...(args.query === undefined ? {} : { query: args.query }), ...(args.kind === undefined ? {} : { kind: args.kind }), ...(args.tag === undefined ? {} : { tag: args.tag }) },
         { ...(args.topK === undefined ? {} : { topK: args.topK }), ...(args.minScore === undefined ? {} : { minScore: args.minScore }), ...(args.maxChars === undefined ? {} : { maxChars: args.maxChars }), ...(args.includeContent === undefined ? {} : { includeContent: args.includeContent }) },
-      ),
+      ).map((hit) => lossless(hit)),
       presentCall: args => ({ card: 'generic', title: 'Recall evolve memory' + (args.query === undefined ? '' : ': ' + String(args.query)), kind: 'read' }),
     }))
 
@@ -800,7 +815,7 @@ export class GitEvolutionService extends Service {
       execute: async (args) => this.core.recall(
         { ...(args.query === undefined ? {} : { query: args.query }), ...(args.kind === undefined ? {} : { kind: args.kind }), ...(args.tag === undefined ? {} : { tag: args.tag }) },
         { ...(args.topK === undefined ? {} : { topK: args.topK }), ...(args.minScore === undefined ? {} : { minScore: args.minScore }), ...(args.maxChars === undefined ? {} : { maxChars: args.maxChars }), ...(args.includeContent === undefined ? {} : { includeContent: args.includeContent }) },
-      ),
+      ).map((hit) => lossless(hit)),
       presentCall: args => ({ card: 'generic', title: 'Search memory' + (args.query === undefined ? '' : ': ' + String(args.query)), kind: 'read' }),
     }))
 
