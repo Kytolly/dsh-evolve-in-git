@@ -17,6 +17,7 @@ export type ParsedEvolveCommand = {
         kind: MemoryKind;
         title: string;
         content: string;
+        expiresAt?: string;
     };
 } | {
     kind: 'invalid';

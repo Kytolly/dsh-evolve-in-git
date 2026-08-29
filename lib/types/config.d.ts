@@ -14,7 +14,17 @@ export interface ConfigFile {
     defaultBranch?: string;
     remoteName?: string;
     autoCommit?: boolean;
+    archiveRoot?: string;
+    recallTopK?: number;
+    recallMinScore?: number;
+    recallMaxChars?: number;
+    digestEnabled?: boolean;
+    digestMaxRecords?: number;
+    digestMaxChars?: number;
+    privacyMode?: 'block' | 'redact' | 'ask';
 }
+/** DSH home directory (`DSH_HOME` env, else `~/.dsh`). */
+export declare function dshHome(): string;
 /** Path to the user-facing config file. */
 export declare function configFilePath(): string;
 /** Read the config file if it exists; return an empty object otherwise. */

@@ -38,6 +38,22 @@ export interface EvolveSettings {
     remoteName?: string;
     /** Whether writes auto-commit. */
     autoCommit?: boolean;
+    /** Where forgotten records are archived, relative to the repo. */
+    archiveRoot?: string;
+    /** Maximum number of recall results. */
+    recallTopK?: number;
+    /** Minimum recall relevance score. */
+    recallMinScore?: number;
+    /** Cumulative character budget for recall content. */
+    recallMaxChars?: number;
+    /** Write-path privacy gate strategy for sensitive content. */
+    privacyMode?: 'block' | 'redact' | 'ask';
+    /** Whether to inject a session-start persona/warning digest. */
+    digestEnabled?: boolean;
+    /** Maximum persona/warning records in the session-start digest. */
+    digestMaxRecords?: number;
+    /** Maximum characters of the session-start digest. */
+    digestMaxChars?: number;
 }
 /** What the evolve settings card renders. */
 export interface EvolveSettingsCardState extends CardShell {
@@ -53,6 +69,14 @@ export interface EvolveSettingsCardState extends CardShell {
     defaultBranch: CardFieldState;
     remoteName: CardFieldState;
     autoCommit: CardFieldState;
+    archiveRoot: CardFieldState;
+    recallTopK: CardFieldState;
+    recallMinScore: CardFieldState;
+    recallMaxChars: CardFieldState;
+    privacyMode: CardFieldState;
+    digestEnabled: CardFieldState;
+    digestMaxRecords: CardFieldState;
+    digestMaxChars: CardFieldState;
 }
 /** The registration-side face the card's slot entry injects. */
 export interface EvolveSettingsCardFace extends CardActions {

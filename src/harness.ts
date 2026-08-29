@@ -1,4 +1,4 @@
-﻿import type { GitEvolutionError } from './git.js'
+import type { GitEvolutionError } from './git.js'
 import type { BranchesView, HelpView, MemoryKind, RememberView, StatusView } from './types.js'
 
 const MEMORY_KINDS: readonly MemoryKind[] = ['session', 'skill', 'warning', 'persona', 'note']
@@ -32,7 +32,7 @@ export type ParsedEvolveCommand =
   | { kind: 'status' }
   | { kind: 'branches' }
   | { kind: 'help' }
-  | { kind: 'remember'; record: { kind: MemoryKind; title: string; content: string } }
+  | { kind: 'remember'; record: { kind: MemoryKind; title: string; content: string; expiresAt?: string } }
   | { kind: 'invalid'; message: string }
 
 function rememberUsage(): string {
@@ -55,9 +55,15 @@ export function parseEvolveCommand(rawInput: string): ParsedEvolveCommand {
   const firstSpace = left.indexOf(' ')
   if (firstSpace === -1) return { kind: 'invalid', message: rememberUsage() }
   const kind = left.slice(0, firstSpace).trim() as MemoryKind
-  const title = left.slice(firstSpace + 1).trim()
+  let title = left.slice(firstSpace + 1).trim()
+  let expiresAt: string | undefined
+  const expiresMatch = title.match(/\s+--expires\s+(\S+)\s*$/)
+  if (expiresMatch !== null && expiresMatch.index !== undefined) {
+    expiresAt = expiresMatch[1]
+    title = title.slice(0, expiresMatch.index).trim()
+  }
   if (!MEMORY_KINDS.includes(kind) || title.length === 0) return { kind: 'invalid', message: rememberUsage() }
-  return { kind: 'remember', record: { kind, title, content } }
+  return { kind: 'remember', record: expiresAt === undefined ? { kind, title, content } : { kind, title, content, expiresAt } }
 }
 
 export function renderHelpView(): HelpView {

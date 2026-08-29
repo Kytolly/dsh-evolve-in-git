@@ -1,4 +1,6 @@
 export type MemoryKind = 'session' | 'skill' | 'warning' | 'persona' | 'note';
+/** Write-path privacy gate strategy for sensitive content. */
+export type PrivacyMode = 'block' | 'redact' | 'ask';
 export interface MemoryRecordInput {
     kind: MemoryKind;
     title: string;
@@ -6,9 +8,17 @@ export interface MemoryRecordInput {
     tags?: readonly string[];
     source?: string;
     branch?: string;
+    expiresAt?: string;
 }
+export type MemoryStatus = 'active' | 'superseded';
 export interface MemoryRecord extends MemoryRecordInput {
     createdAt: string;
+    updatedAt: string;
+    id: string;
+    status: MemoryStatus;
+    sensitivity: string;
+    supersedes?: string;
+    supersededBy?: string;
     path: string;
 }
 export interface SkillDraftInput {
@@ -71,7 +81,13 @@ export interface RememberView {
     kind: MemoryKind;
     title: string;
     createdAt: string;
+    updatedAt: string;
+    id: string;
+    status: string;
+    supersedes: string | null;
+    supersededBy: string | null;
     source: string | null;
+    expiresAt: string | null;
     tags: string[];
 }
 export interface HelpView {
@@ -89,6 +105,14 @@ export interface ResolvedConfig {
     defaultBranch: string;
     remoteName: string;
     autoCommit: boolean;
+    archiveRoot: string;
+    recallTopK: number;
+    recallMinScore: number;
+    recallMaxChars: number;
+    digestEnabled: boolean;
+    digestMaxRecords: number;
+    digestMaxChars: number;
+    privacyMode: PrivacyMode;
 }
 export interface GitAuthConfig {
     mode: 'ssh' | 'token';
@@ -96,4 +120,26 @@ export interface GitAuthConfig {
     tokenEnv?: string;
     token?: string;
     username?: string;
+}
+/**
+ * Partial plugin configuration as provided by the host (Cordis) layer. The
+ * framework-free core resolves this against the on-disk config file.
+ */
+export interface Config {
+    repoPath?: string;
+    repoUrl?: string;
+    auth?: GitAuthConfig;
+    memoryRoot?: string;
+    skillsRoot?: string;
+    defaultBranch?: string;
+    remoteName?: string;
+    autoCommit?: boolean;
+    archiveRoot?: string;
+    recallTopK?: number;
+    recallMinScore?: number;
+    recallMaxChars?: number;
+    digestEnabled?: boolean;
+    digestMaxRecords?: number;
+    digestMaxChars?: number;
+    privacyMode?: PrivacyMode;
 }

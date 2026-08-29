@@ -1,9 +1,11 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { existsSync, readdirSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { dirname, join, resolve } from 'node:path'
-import type { CommittedArtifact, GitAuthConfig, GitStatus, MemoryRecord, MemoryRecordInput, ResolvedConfig, SkillDraft, SkillDraftInput } from './types.js'
+import type { CommittedArtifact, GitAuthConfig, GitStatus, MemoryRecord, MemoryRecordInput, MemoryStatus, ResolvedConfig, SkillDraft, SkillDraftInput } from './types.js'
 import { renderSkillDraft, sanitizeSegment, slugify } from './strategy.js'
+import { classifySensitivity, detectSensitive, redactSensitive } from './privacy.js'
 
 export class GitEvolutionError extends Error {
   code: string
@@ -155,6 +157,16 @@ export function createBranch(repoPath: string, branch: string, from?: string): v
   runGit(repoPath, args)
 }
 
+/** Move a path within the repository using git mv (so history and rollback work). */
+export function gitMove(repoPath: string, from: string, to: string): void {
+  runGit(repoPath, ['mv', from, to])
+}
+
+/** Stage a path in the repository index (needed before git mv can move it). */
+export function gitAdd(repoPath: string, path: string): void {
+  runGit(repoPath, ['add', '--', path])
+}
+
 export function pushBranch(repoPath: string, branch: string, remote: string, auth?: GitAuthConfig, repoUrl?: string): void {
   runGit(repoPath, ['push', remote, branch], repoUrl === undefined ? {} : gitEnv(auth, repoUrl))
 }
@@ -192,7 +204,7 @@ function toIsoStamp(date: Date = new Date()): string {
   return date.toISOString().replaceAll(':', '-').replace(/\.\d{3}Z$/, 'Z')
 }
 
-function frontmatter(lines: Record<string, string | readonly string[] | undefined>): string {
+export function frontmatter(lines: Record<string, string | readonly string[] | undefined>): string {
   const output = ['---']
   for (const [key, value] of Object.entries(lines)) {
     if (value === undefined) continue
@@ -206,7 +218,7 @@ function frontmatter(lines: Record<string, string | readonly string[] | undefine
   return output.join('\n')
 }
 
-function commitPaths(repoPath: string, paths: readonly string[], message: string): string | undefined {
+export function commitPaths(repoPath: string, paths: readonly string[], message: string): string | undefined {
   if (paths.length === 0) return undefined
   runGit(repoPath, ['add', '--', ...paths])
   const staged = spawnSync('git', ['-C', repoPath, 'diff', '--cached', '--quiet'], { encoding: 'utf8' })
@@ -218,15 +230,37 @@ function commitPaths(repoPath: string, paths: readonly string[], message: string
   return currentHead(repoPath)
 }
 
-export function writeMemoryRecord(config: ResolvedConfig, input: MemoryRecordInput): CommittedArtifact & MemoryRecord {
+export interface MemoryWriteOverrides {
+  id?: string
+  status?: MemoryStatus
+  supersedes?: string
+  updatedAt?: string
+}
+
+export function writeMemoryRecord(config: ResolvedConfig, input: MemoryRecordInput, overrides: MemoryWriteOverrides = {}): CommittedArtifact & MemoryRecord {
   const repoPath = openRepository(config)
   const createdAt = new Date().toISOString()
+  const id = overrides.id ?? randomUUID()
+  const updatedAt = overrides.updatedAt ?? createdAt
+  const status = overrides.status ?? 'active'
+  const mode = config.privacyMode ?? 'ask'
+  const matches = detectSensitive(input.content)
+  if (mode === 'block' && matches.length > 0) {
+    throw new GitEvolutionError(
+      'sensitive content blocked by privacyMode=block: ' + matches.map((match) => match.type).join(', '),
+      'PRIVACY_BLOCKED',
+    )
+  }
+  // redact stores the redacted content (never plaintext); ask keeps the content
+  // as-is and marks its sensitivity so the caller can review/confirm.
+  const content = mode === 'redact' ? redactSensitive(input.content) : input.content
+  const sensitivity = classifySensitivity(input.content)
   const branch = input.branch ?? currentBranch(repoPath)
   const filePath = join(
     repoPath,
     config.memoryRoot,
     sanitizeSegment(input.kind),
-    `${toIsoStamp()}-${slugify(input.title)}.md`,
+    `${toIsoStamp()}-${slugify(input.title)}-${id.slice(0, 8)}.md`,
   )
   mkdirSync(dirname(filePath), { recursive: true })
   const body = [
@@ -237,9 +271,15 @@ export function writeMemoryRecord(config: ResolvedConfig, input: MemoryRecordInp
       source: input.source,
       tags: input.tags,
       createdAt,
+      id,
+      updatedAt,
+      status,
+      supersedes: overrides.supersedes,
+      expiresAt: input.expiresAt,
+      sensitivity,
     }),
     '',
-    input.content.trimEnd(),
+    content.trimEnd(),
     '',
   ].join('\n')
   writeFileSync(filePath, body, 'utf8')
@@ -252,16 +292,22 @@ export function writeMemoryRecord(config: ResolvedConfig, input: MemoryRecordInp
     message,
     kind: input.kind,
     title: input.title,
-    content: input.content,
+    content,
     createdAt,
+    updatedAt,
+    id,
+    status,
+    sensitivity,
     ...(input.tags === undefined ? {} : { tags: input.tags }),
     ...(input.source === undefined ? {} : { source: input.source }),
+    ...(input.expiresAt === undefined ? {} : { expiresAt: input.expiresAt }),
+    ...(overrides.supersedes === undefined ? {} : { supersedes: overrides.supersedes }),
   }
 }
 
 export function writeSkillDraft(config: ResolvedConfig, draft: SkillDraftInput): CommittedArtifact & SkillDraft {
   const repoPath = openRepository(config)
-  const filePath = join(repoPath, config.skillsRoot, sanitizeSegment(draft.name), 'SKILL.md')
+  const filePath = join(repoPath, config.skillsRoot, 'drafts', sanitizeSegment(draft.name), 'SKILL.md')
   mkdirSync(dirname(filePath), { recursive: true })
   const rendered = renderSkillDraft(draft)
   writeFileSync(filePath, rendered.content, 'utf8')

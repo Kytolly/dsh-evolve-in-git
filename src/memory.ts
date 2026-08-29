@@ -5,11 +5,17 @@
  * (<repo>/<memoryRoot>/<kind>/<timestamp>-<slug>.md). This module scans those
  * files, parses their YAML frontmatter, and exposes recall (search) and timeline
  * views so the agent can surface relevant memory without the user repeating it.
+ *
+ * Recall is budgeted (topK/minScore/maxChars/includeContent) and reads bodies
+ * lazily: metadata matching runs over the cached index from memory-index.ts, and
+ * only the top-K candidates have their body loaded (and truncated to maxChars).
  * @module dsh-evolve-in-git/memory
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ResolvedConfig } from './types.js'
+import { getMemoryIndex, parseFrontmatterFields, parseTags } from './memory-index.js'
+import type { MemoryIndexEntry } from './memory-index.js'
 
 export interface MemoryMeta {
   path: string
@@ -19,37 +25,33 @@ export interface MemoryMeta {
   source: string | undefined
   tags: string[]
   createdAt: string | undefined
+  updatedAt: string | undefined
+  id: string | undefined
+  status: string | undefined
+  supersedes: string | undefined
+  supersededBy: string | undefined
+  expiresAt: string | undefined
+  sensitivity: string | undefined
   content: string
+}
+
+/** A record with no status (or 'active') is the live version; superseded is hidden by default. */
+function isActiveStatus(status: string | undefined): boolean {
+  return status === undefined || status === 'active'
+}
+
+/** A record whose expiresAt is in the past is hidden by default. */
+function isExpired(expiresAt: string | undefined, now: Date = new Date()): boolean {
+  if (expiresAt === undefined) return false
+  const time = new Date(expiresAt).getTime()
+  // Fail closed: a malformed expiry timestamp hides the record rather than
+  // silently disabling expiration (which could surface stale/expired content).
+  if (!Number.isFinite(time)) return true
+  return time <= now.getTime()
 }
 
 function memoryRootOf(config: ResolvedConfig): string {
   return join(config.repoPath, config.memoryRoot)
-}
-
-function parseFrontmatterFields(raw: string): Record<string, string | undefined> {
-  const match = raw.match(/^---\n([\s\S]*?)\n---/m)
-  if (match === null) return {}
-  const body = match[1]
-  if (body === undefined) return {}
-  const out: Record<string, string | undefined> = {}
-  for (const line of body.split(/\r?\n/)) {
-    const kv = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/)
-    if (kv === null) continue
-    const key = kv[1] as string
-    let value = (kv[2] ?? '').trim()
-    if (value.startsWith('"') && value.endsWith('"')) value = value.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\')
-    out[key] = value
-  }
-  return out
-}
-
-function parseTags(value: string | undefined): string[] {
-  if (value === undefined) return []
-  const trimmed = value.trim()
-  if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
-    return trimmed.slice(1, -1).split(',').map((item) => item.trim().replace(/^"|"$/g, '')).filter(Boolean)
-  }
-  return trimmed.split(/\s+/).filter(Boolean)
 }
 
 function readMemoryMeta(path: string): MemoryMeta {
@@ -64,6 +66,13 @@ function readMemoryMeta(path: string): MemoryMeta {
     source: fm['source'],
     tags: parseTags(fm['tags']),
     createdAt: fm['createdAt'],
+    updatedAt: fm['updatedAt'],
+    id: fm['id'],
+    status: fm['status'],
+    supersedes: fm['supersedes'],
+    supersededBy: fm['supersededBy'],
+    expiresAt: fm['expiresAt'],
+    sensitivity: fm['sensitivity'],
     content: body,
   }
 }
@@ -76,16 +85,16 @@ function walkMarkdown(dir: string, out: string[]): void {
   }
 }
 
-/** Scan every memory record under the configured memory root. */
+/** Scan every memory record under the configured memory root (full bodies). */
 export function scanMemory(config: ResolvedConfig): MemoryMeta[] {
   const files: string[] = []
   walkMarkdown(memoryRootOf(config), files)
   return files.map(readMemoryMeta)
 }
 
-/** Memory records sorted newest-first by their createdAt stamp. */
+/** Memory records sorted newest-first by their createdAt stamp (active only). */
 export function memoryTimeline(config: ResolvedConfig): MemoryMeta[] {
-  return scanMemory(config).sort((left, right) => (right.createdAt ?? '').localeCompare(left.createdAt ?? ''))
+  return scanMemory(config).filter((memo) => isActiveStatus(memo.status) && !isExpired(memo.expiresAt)).sort((left, right) => (right.createdAt ?? '').localeCompare(left.createdAt ?? ''))
 }
 
 export interface RecallFilter {
@@ -102,10 +111,116 @@ export interface RecallFilter {
 export function searchMemory(config: ResolvedConfig, filter: RecallFilter): MemoryMeta[] {
   const q = (filter.query ?? '').trim().toLowerCase()
   return scanMemory(config).filter((memo) => {
+    if (!isActiveStatus(memo.status) || isExpired(memo.expiresAt)) return false
     if (filter.kind !== undefined && memo.kind !== filter.kind) return false
     if (filter.tag !== undefined && memo.tags.includes(filter.tag) === false) return false
     if (q.length === 0) return true
     const haystack = [memo.title ?? '', memo.content, memo.kind ?? '', ...memo.tags].join(' ').toLowerCase()
     return haystack.includes(q)
   }).sort((left, right) => (right.createdAt ?? '').localeCompare(left.createdAt ?? ''))
+}
+
+/** Retrieval budget the recall tool and config surface control. */
+export interface RecallBudget {
+  /** Maximum number of results to return (default from config, fallback 10). */
+  topK?: number
+  /** Minimum relevance score to keep (default 0). */
+  minScore?: number
+  /** Cumulative character budget for returned content (default 8000). */
+  maxChars?: number
+  /** Whether to load and return body content at all (default true). */
+  includeContent?: boolean
+}
+
+/** One recall result: metadata plus a relevance score and (budgeted) content. */
+export interface RecallHit {
+  path: string
+  kind: string | undefined
+  title: string | undefined
+  branch: string | undefined
+  source: string | undefined
+  tags: string[]
+  createdAt: string | undefined
+  updatedAt: string | undefined
+  id: string | undefined
+  status: string | undefined
+  supersedes: string | undefined
+  supersededBy: string | undefined
+  expiresAt: string | undefined
+  sensitivity: string | undefined
+  score: number
+  content: string
+}
+
+/** A coarse relevance score over metadata only (bodies load lazily for top-K). */
+function scoreEntry(entry: MemoryIndexEntry, query: string): number {
+  if (query === '') return 1
+  const title = (entry.title ?? '').toLowerCase()
+  const kind = (entry.kind ?? '').toLowerCase()
+  const branch = (entry.branch ?? '').toLowerCase()
+  const source = (entry.source ?? '').toLowerCase()
+  const tags = entry.tags.map((tag) => tag.toLowerCase())
+  let score = 0
+  if (title.includes(query)) score += 1
+  if (kind.includes(query)) score += 0.5
+  if (tags.some((tag) => tag.includes(query))) score += 0.5
+  if (branch.includes(query)) score += 0.25
+  if (source.includes(query)) score += 0.25
+  return score
+}
+
+/** Read one record's body (frontmatter stripped) — used only for top-K hits. */
+function readBody(path: string): string {
+  const raw = readFileSync(path, 'utf8')
+  return raw.replace(/^---\n[\s\S]*?\n---\n?/, '').trim()
+}
+
+/**
+ * Budgeted recall. Metadata is matched and ranked from the cached index; only
+ * the top-K candidates have their body read, and content is truncated so the
+ * returned content never exceeds maxChars in total.
+ */
+export function recall(config: ResolvedConfig, filter: RecallFilter, budget: RecallBudget = {}): RecallHit[] {
+  const entries = getMemoryIndex(config)
+  const query = (filter.query ?? '').trim().toLowerCase()
+  const topK = Math.max(0, budget.topK ?? 10)
+  const minScore = Math.max(0, budget.minScore ?? 0)
+  const maxChars = Math.max(0, budget.maxChars ?? 8000)
+  const includeContent = budget.includeContent ?? true
+
+  const ranked = entries
+    .filter((entry) => isActiveStatus(entry.status) && !isExpired(entry.expiresAt))
+    .filter((entry) => filter.kind === undefined || entry.kind === filter.kind)
+    .filter((entry) => filter.tag === undefined || entry.tags.includes(filter.tag))
+    .map((entry) => ({ entry, score: scoreEntry(entry, query) }))
+    .filter((item) => item.score >= minScore && (query === '' || item.score > 0))
+    .sort((left, right) => (right.score - left.score) || (right.entry.createdAt ?? '').localeCompare(left.entry.createdAt ?? ''))
+
+  let remaining = maxChars
+  return ranked.slice(0, topK).map(({ entry, score }) => {
+    let content = ''
+    if (includeContent && remaining > 0) {
+      const body = readBody(entry.path)
+      content = body.length > remaining ? body.slice(0, remaining) : body
+      remaining -= content.length
+    }
+    return {
+      path: entry.path,
+      kind: entry.kind,
+      title: entry.title,
+      branch: entry.branch,
+      source: entry.source,
+      tags: entry.tags,
+      createdAt: entry.createdAt,
+      updatedAt: entry.updatedAt,
+      id: entry.id,
+      status: entry.status,
+      supersedes: entry.supersedes,
+      supersededBy: entry.supersededBy,
+      expiresAt: entry.expiresAt,
+      sensitivity: entry.sensitivity,
+      score,
+      content,
+    }
+  })
 }

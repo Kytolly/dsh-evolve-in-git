@@ -27,16 +27,19 @@ export interface ConfigFile {
   defaultBranch?: string
   remoteName?: string
   autoCommit?: boolean
+  archiveRoot?: string
+  recallTopK?: number
+  recallMinScore?: number
+  recallMaxChars?: number
+  digestEnabled?: boolean
+  digestMaxRecords?: number
+  digestMaxChars?: number
+  privacyMode?: 'block' | 'redact' | 'ask'
 }
 
 /** DSH home directory (`DSH_HOME` env, else `~/.dsh`). */
 export function dshHome(): string {
   return process.env['DSH_HOME']?.trim() || join(homedir(), '.dsh')
-}
-
-/** DSH user skills root the filesystem skill provider discovers skills from. */
-export function dshSkillsRoot(): string {
-  return join(dshHome(), 'skills')
 }
 
 /** Path to the user-facing config file. */

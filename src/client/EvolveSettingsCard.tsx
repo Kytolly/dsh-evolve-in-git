@@ -19,7 +19,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { EvolveClientKey } from './locales.ts'
 import { PluginSettingsCard, ValueField, BooleanField, ChoiceField } from './PluginSettingsCard.tsx'
 import { ConfigFileEditor } from './ConfigFileEditor.tsx'
-import { CardForm, booleanField, choiceField, objectField, secretField, textField, type CardActions, type CardShell, type FieldState as CardFieldState } from './settings-form.ts'
+import { CardForm, booleanField, choiceField, numberField, objectField, secretField, textField, type CardActions, type CardShell, type FieldState as CardFieldState } from './settings-form.ts'
 import sectionCss from './settings-section.module.css'
 
 /** The evolve-git settings fields this card edits (the namespace's full schema). */
@@ -46,6 +46,22 @@ export interface EvolveSettings {
   remoteName?: string
   /** Whether writes auto-commit. */
   autoCommit?: boolean
+  /** Where forgotten records are archived, relative to the repo. */
+  archiveRoot?: string
+  /** Maximum number of recall results. */
+  recallTopK?: number
+  /** Minimum recall relevance score. */
+  recallMinScore?: number
+  /** Cumulative character budget for recall content. */
+  recallMaxChars?: number
+  /** Write-path privacy gate strategy for sensitive content. */
+  privacyMode?: 'block' | 'redact' | 'ask'
+  /** Whether to inject a session-start persona/warning digest. */
+  digestEnabled?: boolean
+  /** Maximum persona/warning records in the session-start digest. */
+  digestMaxRecords?: number
+  /** Maximum characters of the session-start digest. */
+  digestMaxChars?: number
 }
 
 /** What the evolve settings card renders. */
@@ -62,6 +78,14 @@ export interface EvolveSettingsCardState extends CardShell {
   defaultBranch: CardFieldState
   remoteName: CardFieldState
   autoCommit: CardFieldState
+  archiveRoot: CardFieldState
+  recallTopK: CardFieldState
+  recallMinScore: CardFieldState
+  recallMaxChars: CardFieldState
+  privacyMode: CardFieldState
+  digestEnabled: CardFieldState
+  digestMaxRecords: CardFieldState
+  digestMaxChars: CardFieldState
 }
 
 /** The registration-side face the card's slot entry injects. */
@@ -95,6 +119,14 @@ export class EvolveSettingsCardController {
       textField('defaultBranch'),
       textField('remoteName'),
       booleanField('autoCommit'),
+      textField('archiveRoot'),
+      numberField('recallTopK', { integer: true, min: 1 }),
+      numberField('recallMinScore', { min: 0 }),
+      numberField('recallMaxChars', { integer: true, min: 0 }),
+      choiceField('privacyMode', ['block', 'redact', 'ask']),
+      booleanField('digestEnabled'),
+      numberField('digestMaxRecords', { integer: true, min: 0 }),
+      numberField('digestMaxChars', { integer: true, min: 0 }),
     ])
     this.store = this.form.bind(() => this.projection())
   }
@@ -114,6 +146,14 @@ export class EvolveSettingsCardController {
       defaultBranch: this.form.field('defaultBranch'),
       remoteName: this.form.field('remoteName'),
       autoCommit: this.form.field('autoCommit'),
+      archiveRoot: this.form.field('archiveRoot'),
+      recallTopK: this.form.field('recallTopK'),
+      recallMinScore: this.form.field('recallMinScore'),
+      recallMaxChars: this.form.field('recallMaxChars'),
+      privacyMode: this.form.field('privacyMode'),
+      digestEnabled: this.form.field('digestEnabled'),
+      digestMaxRecords: this.form.field('digestMaxRecords'),
+      digestMaxChars: this.form.field('digestMaxChars'),
     }
   }
 
@@ -279,6 +319,87 @@ export function EvolveSettingsCard(props: EvolveSettingsCardProps) {
         {...state.autoCommit}
         onEdit={(text) => { props.edit('autoCommit', text) }}
         onReset={() => { props.resetField('autoCommit') }}
+      />
+      <ValueField
+        id="settings-evolve-git-archive-root"
+        label={t('field.archiveRoot')}
+        hint={t('field.archiveRoot.hint')}
+        {...fieldProps}
+        {...state.archiveRoot}
+        onEdit={(text) => { props.edit('archiveRoot', text) }}
+        onReset={() => { props.resetField('archiveRoot') }}
+      />
+      <ValueField
+        id="settings-evolve-git-recall-top-k"
+        label={t('field.recallTopK')}
+        hint={t('field.recallTopK.hint')}
+        {...fieldProps}
+        {...state.recallTopK}
+        onEdit={(text) => { props.edit('recallTopK', text) }}
+        onReset={() => { props.resetField('recallTopK') }}
+      />
+      <ValueField
+        id="settings-evolve-git-recall-min-score"
+        label={t('field.recallMinScore')}
+        hint={t('field.recallMinScore.hint')}
+        {...fieldProps}
+        {...state.recallMinScore}
+        onEdit={(text) => { props.edit('recallMinScore', text) }}
+        onReset={() => { props.resetField('recallMinScore') }}
+      />
+      <ValueField
+        id="settings-evolve-git-recall-max-chars"
+        label={t('field.recallMaxChars')}
+        hint={t('field.recallMaxChars.hint')}
+        {...fieldProps}
+        {...state.recallMaxChars}
+        onEdit={(text) => { props.edit('recallMaxChars', text) }}
+        onReset={() => { props.resetField('recallMaxChars') }}
+      />
+      <ChoiceField
+        id="settings-evolve-git-privacy-mode"
+        label={t('field.privacyMode')}
+        hint={t('field.privacyMode.hint')}
+        inheritLabel={t('settings.inherit')}
+        {...fieldProps}
+        {...state.privacyMode}
+        choices={[
+          { value: 'block', label: t('field.privacyMode.block') },
+          { value: 'redact', label: t('field.privacyMode.redact') },
+          { value: 'ask', label: t('field.privacyMode.ask') },
+        ]}
+        onEdit={(text) => { props.edit('privacyMode', text) }}
+        onReset={() => { props.resetField('privacyMode') }}
+      />
+      <BooleanField
+        id="settings-evolve-git-digest-enabled"
+        label={t('field.digestEnabled')}
+        hint={t('field.digestEnabled.hint')}
+        inheritLabel={t('settings.inherit')}
+        onLabel={t('settings.on')}
+        offLabel={t('settings.off')}
+        {...fieldProps}
+        {...state.digestEnabled}
+        onEdit={(text) => { props.edit('digestEnabled', text) }}
+        onReset={() => { props.resetField('digestEnabled') }}
+      />
+      <ValueField
+        id="settings-evolve-git-digest-max-records"
+        label={t('field.digestMaxRecords')}
+        hint={t('field.digestMaxRecords.hint')}
+        {...fieldProps}
+        {...state.digestMaxRecords}
+        onEdit={(text) => { props.edit('digestMaxRecords', text) }}
+        onReset={() => { props.resetField('digestMaxRecords') }}
+      />
+      <ValueField
+        id="settings-evolve-git-digest-max-chars"
+        label={t('field.digestMaxChars')}
+        hint={t('field.digestMaxChars.hint')}
+        {...fieldProps}
+        {...state.digestMaxChars}
+        onEdit={(text) => { props.edit('digestMaxChars', text) }}
+        onReset={() => { props.resetField('digestMaxChars') }}
       />
       <ConfigFileEditor t={t} />
     </PluginSettingsCard>

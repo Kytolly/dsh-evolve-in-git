@@ -1,33 +1,23 @@
 /**
  * Git-backed memory and evolution runtime for DeepSeek Harness.
+ *
+ * This module is the DSH adapter: it owns Cordis service registration, tool
+ * definitions, the /evolve command, the system prompt, and the config route.
+ * All memory/Git/skill behavior lives in the framework-free MemoryCore
+ * (src/core.ts); this service only maps host surfaces onto it.
  * @module dsh-evolve-in-git
  */
 
 import { Context, Service } from '@deepseek-ai/cordis'
-import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import type { CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands'
 import z from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-system-prompt'
-import {
-  branchDiff,
-  checkoutBranch as gitCheckoutBranch,
-  connectRepository,
-  createBranch as gitCreateBranch,
-  currentBranch,
-  currentHead,
-  ensureGitRepository,
-  fetchRemote,
-  gitStatus,
-  listBranches,
-  listConflicts,
-  pushBranch,
-  resolveConflict,
-  revertCommit,
-  writeMemoryRecord,
-  writeSkillDraft,
-} from './git.js'
+import type { SkillCandidate, SkillDefinition, SkillRegistry } from '@deepseek-ai/dsh-skill'
+import { GitMemoryCore } from './core.js'
+import type { UpdatePatch } from './update.js'
 import {
   parseEvolveCommand,
   renderBranchesText,
@@ -37,17 +27,13 @@ import {
   renderStatusText,
   userFacingError,
 } from './harness.js'
-import { configFilePath, mergeConfig, readConfigFile, writeConfigFile } from './config.js'
-import { DEFAULT_AUTH, DEFAULT_BRANCH, DEFAULT_MEMORY_ROOT, DEFAULT_REMOTE, DEFAULT_REPO_PATH, DEFAULT_REPO_URL, DEFAULT_SKILLS_ROOT } from './defaults.js'
-import { listSkillDrafts, promoteSkillDraft, syncBundledSkills } from './skill.js'
-import { memoryTimeline, searchMemory } from './memory.js'
 import { makeConfigRoutes } from './config-route.js'
-import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
+import { DEFAULT_ARCHIVE_ROOT, DEFAULT_AUTH, DEFAULT_BRANCH, DEFAULT_DIGEST_ENABLED, DEFAULT_DIGEST_MAX_CHARS, DEFAULT_DIGEST_MAX_RECORDS, DEFAULT_MEMORY_ROOT, DEFAULT_PRIVACY_MODE, DEFAULT_RECALL_MAX_CHARS, DEFAULT_RECALL_MIN_SCORE, DEFAULT_RECALL_TOP_K, DEFAULT_REMOTE, DEFAULT_REPO_PATH, DEFAULT_REPO_URL, DEFAULT_SKILLS_ROOT } from './defaults.js'
 import type {
   BranchesView,
   CommittedArtifact,
+  Config,
   EvolutionSuggestion,
-  GitAuthConfig,
   GitStatus,
   HelpView,
   MemoryKind,
@@ -59,16 +45,7 @@ import type {
   SkillDraftInput,
   StatusView,
 } from './types.js'
-import {
-  branchNameForRecord,
-  draftSkillFromRecord,
-  memoryPreview,
-  renderSkillDraft,
-  sanitizeSegment,
-  shouldOfferSkillPromotion,
-  slugify,
-  suggestEvolution,
-} from './strategy.js'
+import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 
 export const name = 'dsh-evolve-in-git'
 export const inject = ['commands', 'tools', 'systemPrompt']
@@ -102,22 +79,11 @@ declare module '@deepseek-ai/cordis' {
   }
 }
 
-export interface Config {
-  repoPath?: string
-  repoUrl?: string
-  auth?: GitAuthConfig
-  memoryRoot?: string
-  skillsRoot?: string
-  defaultBranch?: string
-  remoteName?: string
-  autoCommit?: boolean
-}
-
 const PROMPT_TEXT =
   'Use evolve_connect to verify the private memory repository, evolve_status to inspect branch and sync state, '
-  + 'evolve_remember to persist a reusable memory note, evolve_branches to inspect local evolution branches, '
-  + 'evolve_skill_draft to turn a memory into a skill draft, evolve_skill_list to see promotable skill drafts, evolve_skill_promote to install one into the skill registry, evolve_rollback to undo a memory/skill commit (dry-run available), evolve_conflicts to list unresolved conflicts, and '
-  + 'before a high-stakes step, use evolve_recall to surface relevant prior memory (or evolve_timeline to read the memory history) instead of asking the user to repeat it; and '
+  + 'evolve_remember (or memory_save) to persist a reusable memory note, evolve_update (or memory_update) to revise one, evolve_forget (or memory_delete) and evolve_restore to archive and restore, evolve_branches to inspect local evolution branches, '
+  + 'evolve_skill_draft to turn a memory into a skill draft, evolve_skill_list to see promotable skill drafts, evolve_skill_promote to install one into the skill registry, evolve_skill_demote to move one back to drafts, evolve_rollback to undo a memory/skill commit (dry-run available), evolve_conflicts to list unresolved conflicts, and '
+  + 'before a high-stakes step, use evolve_recall (or memory_search) to surface relevant prior memory (or evolve_timeline to read the memory history) instead of asking the user to repeat it; and '
   + 'evolve_help to recall the command and safety surface.'
 
 const STATUS_VIEW_SCHEMA = {
@@ -162,7 +128,13 @@ const REMEMBER_VIEW_SCHEMA = {
     kind: { type: 'string', required: true, enum: ['session', 'skill', 'warning', 'persona', 'note'] },
     title: { type: 'string', required: true },
     createdAt: { type: 'string', required: true },
+    updatedAt: { type: 'string', required: true },
+    id: { type: 'string', required: true },
+    status: { type: 'string', required: true },
+    supersedes: { oneOf: [{ type: 'string' }, { type: 'null' }], required: true },
+    supersededBy: { oneOf: [{ type: 'string' }, { type: 'null' }], required: true },
     source: { oneOf: [{ type: 'string' }, { type: 'null' }], required: true },
+    expiresAt: { oneOf: [{ type: 'string' }, { type: 'null' }], required: true },
     tags: { type: 'array', required: true, items: { type: 'string' } },
   },
 } as const
@@ -257,8 +229,17 @@ const MEMORY_ITEM_SCHEMA = {
   },
 } as const
 
+const RECALL_ITEM_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    ...MEMORY_ITEM_SCHEMA.properties,
+    score: { type: 'number', required: true },
+  },
+} as const
+
 const TIMELINE_VIEW_SCHEMA = { type: 'array', items: MEMORY_ITEM_SCHEMA } as const
-const RECALL_VIEW_SCHEMA = { type: 'array', items: MEMORY_ITEM_SCHEMA } as const
+const RECALL_VIEW_SCHEMA = { type: 'array', items: RECALL_ITEM_SCHEMA } as const
 
 const BRANCH_DIFF_VIEW_SCHEMA = {
   type: 'object',
@@ -280,30 +261,59 @@ const BRANCH_VIEW_SCHEMA = {
   },
 } as const
 
+const FORGET_VIEW_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    id: { type: 'string', required: true },
+    archivedPath: { type: 'string', required: true },
+  },
+} as const
+
+const RESTORE_VIEW_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    id: { type: 'string', required: true },
+    restoredPath: { type: 'string', required: true },
+  },
+} as const
+
+const SHOW_VIEW_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    path: { type: 'string', required: true },
+    kind: { oneOf: [{ type: 'string' }, { type: 'null' }], required: true },
+    title: { oneOf: [{ type: 'string' }, { type: 'null' }], required: true },
+    branch: { oneOf: [{ type: 'string' }, { type: 'null' }], required: true },
+    source: { oneOf: [{ type: 'string' }, { type: 'null' }], required: true },
+    tags: { type: 'array', required: true, items: { type: 'string' } },
+    createdAt: { oneOf: [{ type: 'string' }, { type: 'null' }], required: true },
+    updatedAt: { oneOf: [{ type: 'string' }, { type: 'null' }], required: true },
+    id: { oneOf: [{ type: 'string' }, { type: 'null' }], required: true },
+    status: { oneOf: [{ type: 'string' }, { type: 'null' }], required: true },
+    sensitivity: { oneOf: [{ type: 'string' }, { type: 'null' }], required: true },
+    supersedes: { oneOf: [{ type: 'string' }, { type: 'null' }], required: true },
+    supersededBy: { oneOf: [{ type: 'string' }, { type: 'null' }], required: true },
+    expiresAt: { oneOf: [{ type: 'string' }, { type: 'null' }], required: true },
+    content: { type: 'string', required: true },
+  },
+} as const
+
+const EXPORT_VIEW_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    format: { type: 'string', required: true },
+    text: { type: 'string', required: true },
+  },
+} as const
+
 function jsonOutput(schema: unknown) {
   return {
     schema,
     render: (_args: unknown, value: unknown) => [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }],
-  }
-}
-
-/** Expand a leading '~' in a user-supplied path to the home directory (node:path does not). */
-function expandHome(path: string): string {
-  if (path === '~') return homedir()
-  if (path.startsWith('~/')) return join(homedir(), path.slice(2))
-  return path
-}
-
-function resolveConfig(config: Config): ResolvedConfig {
-  return {
-    repoPath: expandHome(config.repoPath?.trim() || DEFAULT_REPO_PATH),
-    repoUrl: config.repoUrl?.trim() || DEFAULT_REPO_URL,
-    auth: config.auth ?? DEFAULT_AUTH,
-    memoryRoot: config.memoryRoot?.trim() || DEFAULT_MEMORY_ROOT,
-    skillsRoot: config.skillsRoot?.trim() || DEFAULT_SKILLS_ROOT,
-    defaultBranch: config.defaultBranch?.trim() || DEFAULT_BRANCH,
-    remoteName: config.remoteName?.trim() || DEFAULT_REMOTE,
-    autoCommit: config.autoCommit ?? true,
   }
 }
 
@@ -322,12 +332,12 @@ function normalizeStatus(repoPath: string, config: ResolvedConfig, status: GitSt
   }
 }
 
-function normalizeBranches(repoPath: string, config: ResolvedConfig, branches: string[]): BranchesView {
+function normalizeBranches(repoPath: string, config: ResolvedConfig, current: string, branches: string[]): BranchesView {
   return {
     repoPath,
     repoUrl: config.repoUrl,
     remoteName: config.remoteName,
-    currentBranch: currentBranch(repoPath),
+    currentBranch: current,
     branches,
   }
 }
@@ -343,7 +353,13 @@ function normalizeRemember(config: ResolvedConfig, value: CommittedArtifact & Me
     kind: value.kind,
     title: value.title,
     createdAt: value.createdAt,
+    updatedAt: value.updatedAt,
+    id: value.id,
+    status: value.status,
+    supersedes: value.supersedes ?? null,
+    supersededBy: value.supersededBy ?? null,
     source: value.source ?? null,
+    expiresAt: value.expiresAt ?? null,
     tags: value.tags === undefined ? [] : [...value.tags],
   }
 }
@@ -369,34 +385,94 @@ export class GitEvolutionService extends Service {
     defaultBranch: z.string().default(DEFAULT_BRANCH),
     remoteName: z.string().default(DEFAULT_REMOTE),
     autoCommit: z.boolean().default(true),
+    archiveRoot: z.string().default(DEFAULT_ARCHIVE_ROOT),
+    recallTopK: z.number().min(1).default(DEFAULT_RECALL_TOP_K),
+    recallMinScore: z.number().min(0).default(DEFAULT_RECALL_MIN_SCORE),
+    recallMaxChars: z.number().min(0).default(DEFAULT_RECALL_MAX_CHARS),
+    digestEnabled: z.boolean().default(DEFAULT_DIGEST_ENABLED),
+    digestMaxRecords: z.number().min(0).default(DEFAULT_DIGEST_MAX_RECORDS),
+    digestMaxChars: z.number().min(0).default(DEFAULT_DIGEST_MAX_CHARS),
+    privacyMode: z.union([z.const('block'), z.const('redact'), z.const('ask')]).default(DEFAULT_PRIVACY_MODE),
   })
 
-  config: ResolvedConfig
-  private readonly baseConfig: Config
+  private readonly core: GitMemoryCore
+
+  get config(): ResolvedConfig {
+    return this.core.config
+  }
 
   constructor(ctx: Context, config: Config) {
     super(ctx, 'evolveGit')
-    this.baseConfig = config
-    this.config = resolveConfig(mergeConfig(config, readConfigFile()) as Config)
-    try { syncBundledSkills(false) } catch { /* best-effort: materialize bundled skills, never block load */ }
+    this.core = new GitMemoryCore(config)
+    try { this.core.syncSkills(false) } catch { /* best-effort: materialize bundled skills, never block load */ }
+    const digestText = ((): string => { try { return this.core.digest() } catch { return '' } })()
+    const promptText = digestText === '' ? PROMPT_TEXT : PROMPT_TEXT + '\n\nEvolve memory digest (persona/warning):\n' + digestText
     ctx.systemPrompt.section({
       name: 'tool:evolve-git',
       order: 116,
-      text: PROMPT_TEXT,
+      text: promptText,
     })
     this.registerTools(ctx)
+    this.registerSkillProvider(ctx)
     ctx.effect(() => ctx.commands.register({
       name: 'evolve',
       description: 'inspect or write Git-backed long-term memory',
-      input: { hint: 'connect|status|branches|remember <kind> <title> :: <content>|config show|open|refresh|set <key> <value>|skill draft|list|promote <name>|sync|rollback <ref> [--dry]|conflicts|resolve <path> <ours|theirs|both>|timeline|search <q>|branch switch|diff|revert <name|ref>|help' },
+      input: { hint: 'connect|status|branches|remember <kind> <title> [--expires <iso>] :: <content>|update <id> [--merge] :: <content>|forget <id>|restore <id>|config show|open|refresh|set <key> <value>|skill draft|list|promote <name>|demote <name>|sync|rollback <ref> [--dry]|conflicts|resolve <path> <ours|theirs|both>|timeline|search <q>|branch switch|diff|revert <name|ref>|help' },
       handler: invocation => this.runCommand(invocation),
     }), 'dsh-evolve-in-git: command')
     this.registerConfigRoute(ctx)
   }
 
-  /** Recompute this.config from the config file over the Cordis base (the config file is the single user layer). */
+  /** Recompute the core config from the config file over the Cordis base (the config file is the single user layer). */
   private refreshConfig(): void {
-    this.config = resolveConfig(mergeConfig(this.baseConfig, readConfigFile()) as Config)
+    this.core.refreshConfig()
+  }
+
+  /** Register the repo's enabled/ skills directory as a DSH skill provider. */
+  private registerSkillProvider(ctx: Context): void {
+    const registry = ctx.get('skills') as SkillRegistry | undefined
+    if (registry === undefined) return
+    const core = this.core
+    registry.registerProvider(() => ({
+      name: 'evolve-git',
+      async list() {
+        const candidates: SkillCandidate[] = core.listEnabledSkills().map((skill) => ({
+          name: skill.name,
+          description: skill.description,
+          invocation: { modelInvocable: true, userInvocable: true },
+          source: 'custom',
+          provider: 'evolve-git',
+          rank: 0,
+          locator: { path: skill.path, directory: dirname(skill.path) },
+          path: skill.path,
+        }))
+        return candidates
+      },
+      async get(candidate) {
+        const locator = candidate.locator as { path?: string; directory?: string }
+        const path = locator.path ?? candidate.path
+        if (path === undefined) return undefined
+        try {
+          const raw = readFileSync(path, 'utf8')
+          const parsed = parseSkillFrontmatter(raw)
+          if (parsed.name === undefined || parsed.description === undefined) return undefined
+          const definition: SkillDefinition = {
+            name: parsed.name,
+            description: parsed.description,
+            ...(parsed.whenToUse === undefined ? {} : { whenToUse: parsed.whenToUse }),
+            invocation: { modelInvocable: true, userInvocable: true },
+            source: 'custom',
+            provider: 'evolve-git',
+            ...(locator.directory === undefined ? {} : { resourceBase: { kind: 'directory' as const, path: locator.directory } }),
+            path,
+            content: raw,
+          }
+          return definition
+        } catch {
+          return undefined
+        }
+      },
+    }))
   }
 
   private registerTools(ctx: Context): void {
@@ -435,6 +511,7 @@ export class GitEvolutionService extends Service {
         source: { type: 'string', description: 'Optional source pointer, such as a session id or command origin.' },
         branch: { type: 'string', description: 'Optional target branch; omit to use the current branch.' },
         tags: { type: 'array', items: { type: 'string' }, description: 'Optional memory tags.' },
+        expiresAt: { type: 'string', description: 'Optional ISO timestamp after which the record is hidden from recall/timeline.' },
       },
       output: jsonOutput(REMEMBER_VIEW_SCHEMA),
       execute: async (args) => this.rememberView({
@@ -444,8 +521,89 @@ export class GitEvolutionService extends Service {
         ...(args.source === undefined ? {} : { source: args.source }),
         ...(args.branch === undefined ? {} : { branch: args.branch }),
         ...(args.tags === undefined ? {} : { tags: args.tags }),
+        ...(args.expiresAt === undefined ? {} : { expiresAt: args.expiresAt }),
       }),
-      presentCall: args => ({ card: 'generic', title: `Remember ${args.kind}`, kind: 'other', rawInput: args.title }),
+      presentCall: args => ({ card: 'generic', title: 'Remember ' + args.kind, kind: 'other', rawInput: args.title }),
+    }))
+
+    ctx.tools.register(defineTool({
+      name: 'evolve_update',
+      description: 'Update an active memory record by id. overwrite replaces title/content/tags; merge appends content and unions tags. The previous version is kept and marked superseded.',
+      parameters: {
+        id: { type: 'string', required: true, description: 'The active memory record id to update.' },
+        mode: { type: 'string', enum: ['overwrite', 'merge'], description: 'Update mode (default overwrite).' },
+        title: { type: 'string', description: 'Optional new title.' },
+        content: { type: 'string', description: 'New content (overwrite) or content to append (merge).' },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Replacement (overwrite) or union (merge) tags.' },
+        source: { type: 'string', description: 'Optional source pointer.' },
+      },
+      output: jsonOutput(REMEMBER_VIEW_SCHEMA),
+      isConcurrencySafe: () => false,
+      execute: async (args) => this.updateView(args.id as string, {
+        ...(args.mode === undefined ? {} : { mode: args.mode as 'overwrite' | 'merge' }),
+        ...(args.title === undefined ? {} : { title: args.title }),
+        ...(args.content === undefined ? {} : { content: args.content }),
+        ...(args.tags === undefined ? {} : { tags: args.tags }),
+        ...(args.source === undefined ? {} : { source: args.source }),
+      }),
+      presentCall: args => ({ card: 'generic', title: 'Update memory ' + String(args.id), kind: 'write' }),
+    }))
+
+    ctx.tools.register(defineTool({
+      name: 'evolve_forget',
+      description: 'Soft-delete an active memory record by id: move it into the archive root so it disappears from recall/timeline but stays recoverable.',
+      parameters: {
+        id: { type: 'string', required: true, description: 'The active memory record id to forget.' },
+      },
+      output: jsonOutput(FORGET_VIEW_SCHEMA),
+      isConcurrencySafe: () => false,
+      execute: async (args) => this.core.forget(args.id as string),
+      presentCall: args => ({ card: 'generic', title: 'Forget memory ' + String(args.id), kind: 'write' }),
+    }))
+
+    ctx.tools.register(defineTool({
+      name: 'evolve_restore',
+      description: 'Restore a previously forgotten memory record by id, moving it back from the archive root into the memory root.',
+      parameters: {
+        id: { type: 'string', required: true, description: 'The archived memory record id to restore.' },
+      },
+      output: jsonOutput(RESTORE_VIEW_SCHEMA),
+      isConcurrencySafe: () => false,
+      execute: async (args) => this.core.restore(args.id as string),
+      presentCall: args => ({ card: 'generic', title: 'Restore memory ' + String(args.id), kind: 'write' }),
+    }))
+
+    ctx.tools.register(defineTool({
+      name: 'evolve_show',
+      description: 'Read one full memory record (including its content and sensitivity) by id.',
+      parameters: {
+        id: { type: 'string', required: true, description: 'The memory record id to show.' },
+      },
+      output: jsonOutput(SHOW_VIEW_SCHEMA),
+      isConcurrencySafe: () => true,
+      execute: async (args) => {
+        const record = this.core.show(args.id as string)
+        if (record === undefined) throw new Error("no memory record with id '" + args.id + "'")
+        return record
+      },
+      presentCall: args => ({ card: 'generic', title: 'Show memory ' + String(args.id), kind: 'read' }),
+    }))
+
+    ctx.tools.register(defineTool({
+      name: 'evolve_export',
+      description: 'Export active memory records as JSON or Markdown, filtered by a maximum sensitivity level (secret excluded by default).',
+      parameters: {
+        format: { type: 'string', enum: ['json', 'markdown'], description: 'Export format (default json).' },
+        maxSensitivity: { type: 'string', enum: ['public', 'internal', 'confidential', 'secret'], description: 'Only export records up to this sensitivity (default confidential).' },
+      },
+      output: jsonOutput(EXPORT_VIEW_SCHEMA),
+      isConcurrencySafe: () => true,
+      execute: async (args) => {
+        const format = (args.format === 'markdown' ? 'markdown' : 'json') as 'json' | 'markdown'
+        const maxSensitivity = (args.maxSensitivity as 'public' | 'internal' | 'confidential' | 'secret' | undefined) ?? 'confidential'
+        return { format, text: this.core.export({ format, maxSensitivity }) }
+      },
+      presentCall: () => ({ card: 'generic', title: 'Export evolve memory', kind: 'read' }),
     }))
 
     ctx.tools.register(defineTool({
@@ -474,7 +632,7 @@ export class GitEvolutionService extends Service {
       parameters: {},
       output: jsonOutput(SKILL_LIST_VIEW_SCHEMA),
       isConcurrencySafe: () => true,
-      execute: async () => listSkillDrafts(this.config),
+      execute: async () => this.core.listSkillDrafts(),
       presentCall: () => ({ card: 'generic', title: 'List evolve skill drafts', kind: 'read' }),
     }))
 
@@ -486,8 +644,20 @@ export class GitEvolutionService extends Service {
       },
       output: jsonOutput(PROMOTE_VIEW_SCHEMA),
       isConcurrencySafe: () => false,
-      execute: async (args) => promoteSkillDraft(this.config, args.name as string),
+      execute: async (args) => this.core.promoteSkillDraft(args.name as string),
       presentCall: args => ({ card: 'generic', title: 'Promote skill ' + String(args.name), kind: 'write' }),
+    }))
+
+    ctx.tools.register(defineTool({
+      name: 'evolve_skill_demote',
+      description: 'Move an enabled skill back into the drafts directory, removing it from the DSH skill registry while keeping it in Git history.',
+      parameters: {
+        name: { type: 'string', required: true, description: 'Enabled skill name (kebab-case) to demote.' },
+      },
+      output: jsonOutput(PROMOTE_VIEW_SCHEMA),
+      isConcurrencySafe: () => false,
+      execute: async (args) => this.core.demoteSkillDraft(args.name as string),
+      presentCall: args => ({ card: 'generic', title: 'Demote skill ' + String(args.name), kind: 'write' }),
     }))
 
     ctx.tools.register(defineTool({
@@ -502,7 +672,12 @@ export class GitEvolutionService extends Service {
       output: jsonOutput(DRAFT_VIEW_SCHEMA),
       isConcurrencySafe: () => false,
       execute: async (args) => {
-        const draft = await this.saveSkillDraft(draftSkillFromRecord({ kind: args.kind as MemoryKind, title: args.title, content: args.content, ...(args.tags === undefined ? {} : { tags: args.tags }) }))
+        const draft = this.core.saveSkillDraftFromRecord({
+          kind: args.kind as MemoryKind,
+          title: args.title,
+          content: args.content,
+          ...(args.tags === undefined ? {} : { tags: args.tags }),
+        })
         return { name: draft.name, description: draft.description, whenToUse: draft.whenToUse, path: draft.path, content: draft.content }
       },
       presentCall: args => ({ card: 'generic', title: 'Draft skill from ' + String(args.kind), kind: 'write', rawInput: args.title }),
@@ -518,7 +693,7 @@ export class GitEvolutionService extends Service {
       output: jsonOutput(ROLLBACK_VIEW_SCHEMA),
       isConcurrencySafe: () => false,
       execute: async (args) => {
-        const result = revertCommit(this.config, args.ref as string, args.dryRun === true)
+        const result = this.core.rollback(args.ref as string, args.dryRun === true)
         return { dryRun: result.dryRun, reverted: result.reverted, commit: result.commit ?? null, wouldChange: result.wouldChange }
       },
       presentCall: args => ({ card: 'generic', title: 'Rollback ' + String(args.ref), kind: 'write' }),
@@ -530,7 +705,7 @@ export class GitEvolutionService extends Service {
       parameters: {},
       output: jsonOutput(CONFLICTS_VIEW_SCHEMA),
       isConcurrencySafe: () => true,
-      execute: async () => ({ conflicts: listConflicts(connectRepository(this.config)) }),
+      execute: async () => ({ conflicts: this.core.conflicts() }),
       presentCall: () => ({ card: 'generic', title: 'List evolve conflicts', kind: 'read' }),
     }))
 
@@ -543,7 +718,7 @@ export class GitEvolutionService extends Service {
       },
       output: jsonOutput(RESOLVE_VIEW_SCHEMA),
       isConcurrencySafe: () => false,
-      execute: async (args) => ({ path: resolveConflict(connectRepository(this.config), args.path as string, args.strategy as 'ours' | 'theirs' | 'both'), strategy: String(args.strategy) }),
+      execute: async (args) => ({ path: this.core.resolve(args.path as string, args.strategy as 'ours' | 'theirs' | 'both'), strategy: String(args.strategy) }),
       presentCall: args => ({ card: 'generic', title: 'Resolve conflict ' + String(args.path), kind: 'write' }),
     }))
 
@@ -553,7 +728,7 @@ export class GitEvolutionService extends Service {
       parameters: {},
       output: jsonOutput(TIMELINE_VIEW_SCHEMA),
       isConcurrencySafe: () => true,
-      execute: async () => memoryTimeline(this.config),
+      execute: async () => this.core.timeline(),
       presentCall: () => ({ card: 'generic', title: 'Read evolve memory timeline', kind: 'read' }),
     }))
 
@@ -561,13 +736,20 @@ export class GitEvolutionService extends Service {
       name: 'evolve_recall',
       description: 'Search the evolve memory for records matching a keyword, optionally filtered by kind or tag. Use to surface prior decisions or lessons without re-asking the user.',
       parameters: {
-        query: { type: 'string', description: 'Keyword to match against title/content/tags/kind.' },
+        query: { type: 'string', description: 'Keyword matched against metadata (title/kind/tags/branch/source); body content is returned lazily but not scored.' },
         kind: { type: 'string', description: 'Optional memory kind filter (session/skill/warning/persona/note).' },
         tag: { type: 'string', description: 'Optional tag filter.' },
+        topK: { type: 'integer', description: 'Maximum number of results to return (default from config).' },
+        minScore: { type: 'number', description: 'Minimum relevance score to keep (default 0).' },
+        maxChars: { type: 'integer', description: 'Maximum total characters of returned content (default 8000).' },
+        includeContent: { type: 'boolean', description: 'Whether to return body content (default true).' },
       },
       output: jsonOutput(RECALL_VIEW_SCHEMA),
       isConcurrencySafe: () => true,
-      execute: async (args) => searchMemory(this.config, { ...(args.query === undefined ? {} : { query: args.query }), ...(args.kind === undefined ? {} : { kind: args.kind }), ...(args.tag === undefined ? {} : { tag: args.tag }) }),
+      execute: async (args) => this.core.recall(
+        { ...(args.query === undefined ? {} : { query: args.query }), ...(args.kind === undefined ? {} : { kind: args.kind }), ...(args.tag === undefined ? {} : { tag: args.tag }) },
+        { ...(args.topK === undefined ? {} : { topK: args.topK }), ...(args.minScore === undefined ? {} : { minScore: args.minScore }), ...(args.maxChars === undefined ? {} : { maxChars: args.maxChars }), ...(args.includeContent === undefined ? {} : { includeContent: args.includeContent }) },
+      ),
       presentCall: args => ({ card: 'generic', title: 'Recall evolve memory' + (args.query === undefined ? '' : ': ' + String(args.query)), kind: 'read' }),
     }))
 
@@ -580,9 +762,8 @@ export class GitEvolutionService extends Service {
       output: jsonOutput(BRANCH_VIEW_SCHEMA),
       isConcurrencySafe: () => false,
       execute: async (args) => {
-        const repoPath = connectRepository(this.config)
-        gitCheckoutBranch(repoPath, args.name as string)
-        return { branch: currentBranch(repoPath), ref: currentHead(repoPath) ?? null }
+        const result = this.core.checkoutBranch(args.name as string)
+        return { branch: result.branch, ref: result.head ?? null }
       },
       presentCall: args => ({ card: 'generic', title: 'Switch branch ' + String(args.name), kind: 'write' }),
     }))
@@ -596,8 +777,90 @@ export class GitEvolutionService extends Service {
       },
       output: jsonOutput(BRANCH_DIFF_VIEW_SCHEMA),
       isConcurrencySafe: () => true,
-      execute: async (args) => branchDiff(connectRepository(this.config), args.a as string, args.b),
+      execute: async (args) => this.core.branchDiff(args.a as string, args.b),
       presentCall: args => ({ card: 'generic', title: 'Diff ' + String(args.a), kind: 'read' }),
+    }))
+
+    // memory_* aliases: the same core methods under stable generic names.
+    ctx.tools.register(defineTool({
+      name: 'memory_search',
+      description: 'Alias of evolve_recall: search evolve memory with an optional budget.',
+      parameters: {
+        query: { type: 'string', description: 'Keyword matched against metadata (title/kind/tags/branch/source); body content is returned lazily but not scored.' },
+        kind: { type: 'string', description: 'Optional kind filter.' },
+        tag: { type: 'string', description: 'Optional tag filter.' },
+        topK: { type: 'integer', description: 'Maximum results (default from config).' },
+        minScore: { type: 'number', description: 'Minimum relevance score.' },
+        maxChars: { type: 'integer', description: 'Maximum returned content characters.' },
+        includeContent: { type: 'boolean', description: 'Whether to return content.' },
+      },
+      output: jsonOutput(RECALL_VIEW_SCHEMA),
+      isConcurrencySafe: () => true,
+      execute: async (args) => this.core.recall(
+        { ...(args.query === undefined ? {} : { query: args.query }), ...(args.kind === undefined ? {} : { kind: args.kind }), ...(args.tag === undefined ? {} : { tag: args.tag }) },
+        { ...(args.topK === undefined ? {} : { topK: args.topK }), ...(args.minScore === undefined ? {} : { minScore: args.minScore }), ...(args.maxChars === undefined ? {} : { maxChars: args.maxChars }), ...(args.includeContent === undefined ? {} : { includeContent: args.includeContent }) },
+      ),
+      presentCall: args => ({ card: 'generic', title: 'Search memory' + (args.query === undefined ? '' : ': ' + String(args.query)), kind: 'read' }),
+    }))
+
+    ctx.tools.register(defineTool({
+      name: 'memory_save',
+      description: 'Alias of evolve_remember: persist one long-term memory entry.',
+      parameters: {
+        kind: { type: 'string', required: true, enum: ['session', 'skill', 'warning', 'persona', 'note'], description: 'Memory kind.' },
+        title: { type: 'string', required: true, description: 'Short memory title.' },
+        content: { type: 'string', required: true, description: 'Memory content.' },
+        source: { type: 'string', description: 'Optional source pointer.' },
+        branch: { type: 'string', description: 'Optional target branch.' },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Optional tags.' },
+        expiresAt: { type: 'string', description: 'Optional ISO timestamp after which the record is hidden.' },
+      },
+      output: jsonOutput(REMEMBER_VIEW_SCHEMA),
+      execute: async (args) => this.rememberView({
+        kind: args.kind as MemoryKind,
+        title: args.title,
+        content: args.content,
+        ...(args.source === undefined ? {} : { source: args.source }),
+        ...(args.branch === undefined ? {} : { branch: args.branch }),
+        ...(args.tags === undefined ? {} : { tags: args.tags }),
+        ...(args.expiresAt === undefined ? {} : { expiresAt: args.expiresAt }),
+      }),
+      presentCall: args => ({ card: 'generic', title: 'Save memory ' + args.kind, kind: 'write', rawInput: args.title }),
+    }))
+
+    ctx.tools.register(defineTool({
+      name: 'memory_update',
+      description: 'Alias of evolve_update: update an active memory record by id.',
+      parameters: {
+        id: { type: 'string', required: true, description: 'Record id to update.' },
+        mode: { type: 'string', enum: ['overwrite', 'merge'], description: 'Update mode.' },
+        title: { type: 'string', description: 'Optional new title.' },
+        content: { type: 'string', description: 'New or appended content.' },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Replacement or union tags.' },
+        source: { type: 'string', description: 'Optional source pointer.' },
+      },
+      output: jsonOutput(REMEMBER_VIEW_SCHEMA),
+      isConcurrencySafe: () => false,
+      execute: async (args) => this.updateView(args.id as string, {
+        ...(args.mode === undefined ? {} : { mode: args.mode as 'overwrite' | 'merge' }),
+        ...(args.title === undefined ? {} : { title: args.title }),
+        ...(args.content === undefined ? {} : { content: args.content }),
+        ...(args.tags === undefined ? {} : { tags: args.tags }),
+        ...(args.source === undefined ? {} : { source: args.source }),
+      }),
+      presentCall: args => ({ card: 'generic', title: 'Update memory ' + String(args.id), kind: 'write' }),
+    }))
+
+    ctx.tools.register(defineTool({
+      name: 'memory_delete',
+      description: 'Alias of evolve_forget: soft-delete an active memory record by id.',
+      parameters: {
+        id: { type: 'string', required: true, description: 'Record id to delete (soft).' },
+      },
+      output: jsonOutput(FORGET_VIEW_SCHEMA),
+      isConcurrencySafe: () => false,
+      execute: async (args) => this.core.forget(args.id as string),
+      presentCall: args => ({ card: 'generic', title: 'Delete memory ' + String(args.id), kind: 'write' }),
     }))
   }
 
@@ -633,68 +896,69 @@ export class GitEvolutionService extends Service {
   }
 
   async status() {
-    return gitStatus(connectRepository(this.config))
+    return this.core.status()
   }
 
   async statusView(): Promise<StatusView> {
-    const repoPath = connectRepository(this.config)
-    return normalizeStatus(repoPath, this.config, gitStatus(repoPath))
+    const repoPath = this.core.connect()
+    return normalizeStatus(repoPath, this.core.config, this.core.status(repoPath))
   }
 
   async branches(): Promise<string[]> {
-    return listBranches(connectRepository(this.config))
+    return this.core.branches()
   }
 
   async branchesView(): Promise<BranchesView> {
-    const repoPath = connectRepository(this.config)
-    return normalizeBranches(repoPath, this.config, listBranches(repoPath))
+    const repoPath = this.core.connect()
+    return normalizeBranches(repoPath, this.core.config, this.core.currentBranch(repoPath), this.core.branches(repoPath))
   }
 
   async record(record: MemoryRecordInput): Promise<CommittedArtifact & MemoryRecord> {
-    return writeMemoryRecord(this.config, record)
+    return this.core.remember(record)
   }
 
   async rememberView(record: MemoryRecordInput): Promise<RememberView> {
-    return normalizeRemember(this.config, await this.record(record))
+    return normalizeRemember(this.core.config, this.core.remember(record))
+  }
+
+  async updateView(id: string, patch: UpdatePatch): Promise<RememberView> {
+    return normalizeRemember(this.core.config, this.core.update(id, patch))
   }
 
   async draftSkill(record: MemoryRecordInput): Promise<SkillDraft> {
-    return renderSkillDraft(draftSkillFromRecord(record))
+    return this.core.draftSkill(record)
   }
 
   async suggest(record: MemoryRecordInput): Promise<EvolutionSuggestion> {
-    return suggestEvolution(record)
+    return this.core.suggest(record)
   }
 
   async saveSkillDraft(draft: SkillDraftInput): Promise<CommittedArtifact & SkillDraft> {
-    return writeSkillDraft(this.config, draft)
+    return this.core.saveSkillDraft(draft)
   }
 
   async createBranch(branch: string, from?: string): Promise<void> {
-    gitCreateBranch(connectRepository(this.config), branch, from ?? this.config.defaultBranch)
+    this.core.createBranch(branch, from)
   }
 
   async checkout(branch: string): Promise<void> {
-    gitCheckoutBranch(connectRepository(this.config), branch)
+    this.core.checkoutBranch(branch)
   }
 
   async fetch(): Promise<void> {
-    const repoPath = connectRepository(this.config)
-    fetchRemote(repoPath, this.config.remoteName, this.config.auth, this.config.repoUrl)
+    this.core.fetch()
   }
 
   async push(branch?: string): Promise<void> {
-    const repoPath = connectRepository(this.config)
-    pushBranch(repoPath, branch ?? currentBranch(repoPath), this.config.remoteName, this.config.auth, this.config.repoUrl)
+    this.core.push(branch)
   }
 
   async connect() {
-    return gitStatus(connectRepository(this.config))
+    return this.core.status()
   }
 
   async connectView(): Promise<StatusView> {
-    const repoPath = connectRepository(this.config)
-    return normalizeStatus(repoPath, this.config, gitStatus(repoPath))
+    return this.statusView()
   }
 
   async helpView(): Promise<HelpView> {
@@ -728,6 +992,15 @@ export class GitEvolutionService extends Service {
       if (input.startsWith('branch')) {
         return this.runBranchCommand(input.slice('branch'.length).trim())
       }
+      if (input.startsWith('update')) {
+        return this.runUpdateCommand(input.slice('update'.length).trim())
+      }
+      if (input.startsWith('forget')) {
+        return this.runForgetCommand(input.slice('forget'.length).trim())
+      }
+      if (input.startsWith('restore')) {
+        return this.runRestoreCommand(input.slice('restore'.length).trim())
+      }
       const parsed = parseEvolveCommand(input)
       switch (parsed.kind) {
         case 'connect':
@@ -751,22 +1024,30 @@ export class GitEvolutionService extends Service {
   }
 
   private runConfigCommand(rest: string): CommandResult {
-    const path = configFilePath()
+    const path = this.core.configFilePath()
     const parts = rest.trim().split(/\s+/).filter(Boolean)
     const cmd = parts[0] ?? 'show'
     const show = (): { kind: 'success'; text: string } => ({
       kind: 'success',
       text: [
         'EvolveInGit config file: ' + path,
-        'repoPath: ' + this.config.repoPath,
-        'repoUrl: ' + this.config.repoUrl,
-        'auth.mode: ' + this.config.auth.mode,
-        'auth.tokenEnv: ' + (this.config.auth.tokenEnv ?? ''),
-        'memoryRoot: ' + this.config.memoryRoot,
-        'skillsRoot: ' + this.config.skillsRoot,
-        'defaultBranch: ' + this.config.defaultBranch,
-        'remoteName: ' + this.config.remoteName,
-        'autoCommit: ' + String(this.config.autoCommit),
+        'repoPath: ' + this.core.config.repoPath,
+        'repoUrl: ' + this.core.config.repoUrl,
+        'auth.mode: ' + this.core.config.auth.mode,
+        'auth.tokenEnv: ' + (this.core.config.auth.tokenEnv ?? ''),
+        'memoryRoot: ' + this.core.config.memoryRoot,
+        'skillsRoot: ' + this.core.config.skillsRoot,
+        'defaultBranch: ' + this.core.config.defaultBranch,
+        'remoteName: ' + this.core.config.remoteName,
+        'autoCommit: ' + String(this.core.config.autoCommit),
+        'archiveRoot: ' + this.core.config.archiveRoot,
+        'recallTopK: ' + String(this.core.config.recallTopK),
+        'recallMinScore: ' + String(this.core.config.recallMinScore),
+        'recallMaxChars: ' + String(this.core.config.recallMaxChars),
+        'digestEnabled: ' + String(this.core.config.digestEnabled),
+        'digestMaxRecords: ' + String(this.core.config.digestMaxRecords),
+        'digestMaxChars: ' + String(this.core.config.digestMaxChars),
+        'privacyMode: ' + this.core.config.privacyMode,
       ].join('\n'),
     })
     const reloadText = (): string => 'Config reloaded from:\n  ' + path
@@ -776,7 +1057,7 @@ export class GitEvolutionService extends Service {
       case 'open':
         return { kind: 'success', text: 'Open the config file in your editor:\n  ' + path }
       case 'refresh':
-        this.config = resolveConfig(mergeConfig(this.baseConfig, readConfigFile()) as Config)
+        this.core.refreshConfig()
         return { kind: 'success', text: reloadText() }
       case 'set': {
         const key = parts[1]
@@ -784,11 +1065,11 @@ export class GitEvolutionService extends Service {
         if (!key || value.length === 0) {
           return { kind: 'error', text: 'Usage: /evolve config set <key> <value>' }
         }
-        const current = readConfigFile()
+        const current = this.core.readConfigFile()
         const parsedValue = parseConfigValue(value)
         setByPath(current, key, parsedValue)
-        writeConfigFile(current)
-        this.config = resolveConfig(mergeConfig(this.baseConfig, readConfigFile()) as Config)
+        this.core.writeConfigFile(current)
+        this.core.refreshConfig()
         return { kind: 'success', text: 'Saved ' + key + ' = ' + JSON.stringify(parsedValue) + ' -> ' + path }
       }
       default:
@@ -801,14 +1082,14 @@ export class GitEvolutionService extends Service {
     const cmd = parts[0] ?? 'list'
     switch (cmd) {
       case 'list': {
-        const drafts = listSkillDrafts(this.config)
+        const drafts = this.core.listSkillDrafts()
         if (drafts.length === 0) {
           return { kind: 'success', text: 'No skill drafts to promote.' }
         }
         return {
           kind: 'success',
           text: [
-            'Promotable skill drafts in ' + join(this.config.repoPath, this.config.skillsRoot) + ':',
+            'Promotable skill drafts in ' + join(this.core.config.repoPath, this.core.config.skillsRoot) + ':',
             ...drafts.map(draft => '- ' + draft.name + ' :: ' + draft.description),
             '',
             'Promote one with: /evolve skill promote <name>',
@@ -821,8 +1102,20 @@ export class GitEvolutionService extends Service {
           return { kind: 'error', text: 'Usage: /evolve skill promote <name>' }
         }
         try {
-          const promoted = promoteSkillDraft(this.config, name)
+          const promoted = this.core.promoteSkillDraft(name)
           return { kind: 'success', text: 'Promoted skill "' + promoted.name + '" -> ' + promoted.targetPath }
+        } catch (error) {
+          return { kind: 'error', text: userFacingError(error) }
+        }
+      }
+      case 'demote': {
+        const name = parts[1]
+        if (name === undefined) {
+          return { kind: 'error', text: 'Usage: /evolve skill demote <name>' }
+        }
+        try {
+          const demoted = this.core.demoteSkillDraft(name)
+          return { kind: 'success', text: 'Demoted skill "' + demoted.name + '" -> ' + demoted.targetPath }
         } catch (error) {
           return { kind: 'error', text: userFacingError(error) }
         }
@@ -834,14 +1127,14 @@ export class GitEvolutionService extends Service {
           return { kind: 'error', text: 'Usage: /evolve skill draft <kind> <title> :: <content>' }
         }
         try {
-          const draft = await this.saveSkillDraft(draftSkillFromRecord(parsed.record))
+          const draft = this.core.saveSkillDraftFromRecord(parsed.record)
           return { kind: 'success', text: 'Drafted skill "' + draft.name + '" -> ' + draft.path }
         } catch (error) {
           return { kind: 'error', text: userFacingError(error) }
         }
       }
       case 'sync': {
-        const synced = syncBundledSkills(true)
+        const synced = this.core.syncSkills(true)
         return {
           kind: 'success',
           text: 'Synced bundled skills:\n' + (synced.length === 0
@@ -850,7 +1143,7 @@ export class GitEvolutionService extends Service {
         }
       }
       default:
-        return { kind: 'error', text: 'Usage: /evolve skill draft <kind> <title> :: <content>|list|promote <name>|sync' }
+        return { kind: 'error', text: 'Usage: /evolve skill draft <kind> <title> :: <content>|list|promote <name>|demote <name>|sync' }
     }
   }
 
@@ -862,7 +1155,7 @@ export class GitEvolutionService extends Service {
       return { kind: 'error', text: 'Usage: /evolve rollback <ref> [--dry]' }
     }
     try {
-      const result = revertCommit(this.config, ref, dryRun)
+      const result = this.core.rollback(ref, dryRun)
       const files = result.wouldChange.length === 0 ? '(none)' : result.wouldChange.join(', ')
       if (result.dryRun) {
         return { kind: 'success', text: 'Dry run: reverting ' + ref + ' would change:\n  ' + files }
@@ -875,7 +1168,7 @@ export class GitEvolutionService extends Service {
 
   private runConflictsCommand(): CommandResult {
     try {
-      const conflicts = listConflicts(connectRepository(this.config))
+      const conflicts = this.core.conflicts()
       if (conflicts.length === 0) {
         return { kind: 'success', text: 'No unresolved conflicts.' }
       }
@@ -893,7 +1186,7 @@ export class GitEvolutionService extends Service {
       return { kind: 'error', text: 'Usage: /evolve resolve <path> <ours|theirs|both>' }
     }
     try {
-      resolveConflict(connectRepository(this.config), path, strategy)
+      this.core.resolve(path, strategy)
       return { kind: 'success', text: 'Resolved ' + path + ' (' + strategy + ')' }
     } catch (error) {
       return { kind: 'error', text: userFacingError(error) }
@@ -901,7 +1194,7 @@ export class GitEvolutionService extends Service {
   }
 
   private runTimelineCommand(): CommandResult {
-    const timeline = memoryTimeline(this.config)
+    const timeline = this.core.timeline()
     if (timeline.length === 0) return { kind: 'success', text: 'No memory records yet.' }
     return {
       kind: 'success',
@@ -924,11 +1217,50 @@ export class GitEvolutionService extends Service {
     if (words.length > 0) filter.query = words.join(' ')
     if (kind !== undefined) filter.kind = kind
     if (tag !== undefined) filter.tag = tag
-    const results = searchMemory(this.config, filter)
+    const results = this.core.recall(filter)
     if (results.length === 0) return { kind: 'success', text: 'No matching memory.' }
     return {
       kind: 'success',
       text: results.map((memo) => '- [' + (memo.kind ?? '?') + '] ' + (memo.title ?? memo.path) + (memo.createdAt === undefined ? '' : '  @' + memo.createdAt)).join('\n'),
+    }
+  }
+
+  private async runUpdateCommand(rest: string): Promise<CommandResult> {
+    const parts = rest.trim().split(/\s+/).filter(Boolean)
+    const id = parts[0]
+    if (id === undefined) {
+      return { kind: 'error', text: 'Usage: /evolve update <id> [--merge] :: <content>' }
+    }
+    const mode: 'overwrite' | 'merge' = parts.includes('--merge') ? 'merge' : 'overwrite'
+    const separator = rest.indexOf('::')
+    const content = separator === -1 ? undefined : rest.slice(separator + 2).trim()
+    try {
+      const view = await this.updateView(id, { mode, ...(content === undefined || content.length === 0 ? {} : { content }) })
+      return { kind: 'success', text: 'Updated memory ' + view.id + ' -> ' + view.path + ' (status ' + view.status + ')' }
+    } catch (error) {
+      return { kind: 'error', text: userFacingError(error) }
+    }
+  }
+
+  private runForgetCommand(rest: string): CommandResult {
+    const id = rest.trim().split(/\s+/).filter(Boolean)[0]
+    if (id === undefined) return { kind: 'error', text: 'Usage: /evolve forget <id>' }
+    try {
+      const result = this.core.forget(id)
+      return { kind: 'success', text: 'Forgotten ' + result.id + ' -> ' + result.archivedPath }
+    } catch (error) {
+      return { kind: 'error', text: userFacingError(error) }
+    }
+  }
+
+  private runRestoreCommand(rest: string): CommandResult {
+    const id = rest.trim().split(/\s+/).filter(Boolean)[0]
+    if (id === undefined) return { kind: 'error', text: 'Usage: /evolve restore <id>' }
+    try {
+      const result = this.core.restore(id)
+      return { kind: 'success', text: 'Restored ' + result.id + ' -> ' + result.restoredPath }
+    } catch (error) {
+      return { kind: 'error', text: userFacingError(error) }
     }
   }
 
@@ -939,9 +1271,8 @@ export class GitEvolutionService extends Service {
     if (sub === 'switch') {
       if (name === undefined) return { kind: 'error', text: 'Usage: /evolve branch switch <name>' }
       try {
-        const repoPath = connectRepository(this.config)
-        gitCheckoutBranch(repoPath, name)
-        return { kind: 'success', text: 'Switched to ' + currentBranch(repoPath) + ' @ ' + (currentHead(repoPath) ?? '') }
+        const result = this.core.checkoutBranch(name)
+        return { kind: 'success', text: 'Switched to ' + result.branch + ' @ ' + (result.head ?? '') }
       } catch (error) { return { kind: 'error', text: userFacingError(error) } }
     }
     if (sub === 'diff') {
@@ -949,14 +1280,14 @@ export class GitEvolutionService extends Service {
       const b = parts[2]
       if (a === undefined) return { kind: 'error', text: 'Usage: /evolve branch diff <a> [b]' }
       try {
-        const result = branchDiff(connectRepository(this.config), a, b)
+        const result = this.core.branchDiff(a, b)
         return { kind: 'success', text: 'Diff ' + result.refA + '..' + result.refB + '\n' + result.stat + (result.files.length === 0 ? '' : '\n' + result.files.join('\n')) }
       } catch (error) { return { kind: 'error', text: userFacingError(error) } }
     }
     if (sub === 'revert') {
       if (name === undefined) return { kind: 'error', text: 'Usage: /evolve branch revert <ref>' }
       try {
-        const result = revertCommit(this.config, name, false)
+        const result = this.core.rollback(name, false)
         return { kind: 'success', text: 'Reverted ' + name + ' -> ' + (result.commit ?? '') }
       } catch (error) { return { kind: 'error', text: userFacingError(error) } }
     }
@@ -974,6 +1305,24 @@ function parseConfigValue(raw: string): unknown {
   } catch {
     return trimmed
   }
+}
+
+/** Read name/description/whenToUse from a SKILL.md frontmatter block. */
+function parseSkillFrontmatter(raw: string): { name?: string; description?: string; whenToUse?: string } {
+  const match = raw.match(/^---\n([\s\S]*?)\n---/m)
+  if (match === null || match[1] === undefined) return {}
+  const out: { name?: string; description?: string; whenToUse?: string } = {}
+  for (const line of match[1].split(/\r?\n/)) {
+    const kv = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/)
+    if (kv === null) continue
+    const key = kv[1] as string
+    let value = (kv[2] ?? '').trim()
+    if (value.startsWith('"') && value.endsWith('"')) value = value.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\')
+    if (key === 'name') out.name = value
+    else if (key === 'description') out.description = value
+    else if (key === 'whenToUse') out.whenToUse = value
+  }
+  return out
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

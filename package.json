@@ -1,6 +1,6 @@
 {
   "name": "dsh-evolve-in-git",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Git-backed long-term memory and evolution plugin for DeepSeek Harness",
   "private": false,
   "type": "module",
@@ -28,6 +28,10 @@
     "./client": {
       "types": "./lib/types/client/index.d.ts",
       "default": "./lib/client.js"
+    },
+    "./core": {
+      "types": "./lib/types/core.d.ts",
+      "default": "./lib/core.js"
     },
     "./git": {
       "types": "./lib/types/git.d.ts",
@@ -66,6 +70,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json && tsc -p tsconfig.client.json && tsdown",
     "prepack": "pnpm build",
+    "pretest": "node scripts/stub-dsh-tools.mjs",
     "test": "node --import tsx/esm --test \"tests/**/*.spec.ts\"",
     "check": "npm run build && npm run test",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit"
