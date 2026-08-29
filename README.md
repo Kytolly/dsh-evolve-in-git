@@ -116,7 +116,7 @@ The web Settings → 演进记忆 section also embeds a **config-file editor** t
 opens this file directly, edits it as raw JSON, and saves it through the
 loopback-only `/api/evolve-git/config` route (saves apply immediately).
 
-## Harness entry points (`v0.6.0`)
+## Harness entry points (`v0.6.1`)
 
 The plugin targets the current Harness `0.1.1-rc.2` host contracts for commands,
 tools, system prompt, and invariants (peerDependencies are `^0.1.1-rc.2`). Install it
@@ -203,7 +203,7 @@ so promoted skills become callable without any copy into `~/.dsh/skills`.
 
 ## Delivery notes (`v0.6.x`)
 
-`v0.6.0` finalized the MVP: metadata-indexed recall with budgets, versioned
+`v0.6.1` finalized the MVP: metadata-indexed recall with budgets, versioned
 update (`supersedes`/`supersededBy`), soft-delete/restore plus expiry, reversible
 skill drafts with the repo `enabled/` directory registered as a DSH skill
 provider, the `block`/`redact`/`ask` privacy write gate, and the `memory_*`

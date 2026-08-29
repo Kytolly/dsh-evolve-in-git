@@ -1,8 +1,10 @@
 # Changelog
 
-## v0.6.1 — Help surface fix
+## v0.6.1 — Fix /evolve command routing
 
-- Update `evolve_help` tool names, usage, and safety text to reflect the full v0.6.0 command surface.
+- Strip a leading `/evolve` prefix in `normalizeEvolveCommand` before command dispatch.
+- Fixes `/evolve search ...` falling through to the legacy help text when the host passes the full command string.
+- Adds a regression test in `tests/harness.spec.ts`.
 
 ## v0.6.0 — MVP (Git-backed long-term memory + evolution)
 
