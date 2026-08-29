@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.6.1 — Help surface fix
+
+- Update `evolve_help` tool names, usage, and safety text to reflect the full v0.6.0 command surface.
+
 ## v0.6.0 — MVP (Git-backed long-term memory + evolution)
 
 ### Core

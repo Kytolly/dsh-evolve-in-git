@@ -1,12 +1,19 @@
-﻿import assert from 'node:assert/strict'
+import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   EVOLVE_USAGE,
+  normalizeEvolveCommand,
   parseEvolveCommand,
   renderHelpText,
   renderHelpView,
   userFacingError,
 } from '../src/harness.js'
+
+test('normalizeEvolveCommand strips a leading /evolve prefix', () => {
+  assert.equal(normalizeEvolveCommand('/evolve search 验收测试'), 'search 验收测试')
+  assert.equal(normalizeEvolveCommand('search 验收测试'), 'search 验收测试')
+  assert.equal(normalizeEvolveCommand('/evolve'), '')
+})
 
 test('parseEvolveCommand understands the v0.1.2 command surface', () => {
   assert.deepEqual(parseEvolveCommand(''), { kind: 'help' })

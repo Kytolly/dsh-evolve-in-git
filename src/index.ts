@@ -19,6 +19,7 @@ import type { SkillCandidate, SkillDefinition, SkillRegistry } from '@deepseek-a
 import { GitMemoryCore } from './core.js'
 import type { UpdatePatch } from './update.js'
 import {
+  normalizeEvolveCommand,
   parseEvolveCommand,
   renderBranchesText,
   renderHelpText,
@@ -967,7 +968,7 @@ export class GitEvolutionService extends Service {
 
   private async runCommand(invocation: CommandInvocation): Promise<CommandResult> {
     try {
-      const input = invocation.rawInput.trim()
+      const input = normalizeEvolveCommand(invocation.rawInput)
       if (input.startsWith('config')) {
         return this.runConfigCommand(input.slice('config'.length).trim())
       }
