@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.6.2 — Publish missing lib/ build artifacts
+
+- Force-include `lib/` artifacts so `github:` installs can resolve `lib/core.js`, `lib/memory-index.js`, `lib/update.js`, `lib/forget.js`, and `lib/privacy.js`.
+
 ## v0.6.1 — Fix /evolve command routing
 
 - Strip a leading `/evolve` prefix in `normalizeEvolveCommand` before command dispatch.
