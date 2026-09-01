@@ -15,10 +15,10 @@ Git-backed long-term memory and evolution plugin for DeepSeek Harness.
 ## Contents
 
 - [What it does](#what-it-does)
-- [Architecture](#architecture)
-- [Data layout](#data-layout)
 - [Install](#install)
 - [Usage](#usage)
+- [Architecture](#architecture)
+- [Data layout](#data-layout)
 - [Config](#config)
 - [Harness entry points](#harness-entry-points)
 - [Browser half](#browser-half)
@@ -30,45 +30,6 @@ Git-backed long-term memory and evolution plugin for DeepSeek Harness.
 
 This plugin treats a user-chosen or preconfigured Git repository as the memory store.
 It can write session notes, branch-specific records, and reusable skill drafts into that repo, then commit them as ordinary Git history.
-
-## Architecture
-
-The package is split into a **framework-free core** and a thin **DSH adapter**:
-
-- `src/core.ts` (`GitMemoryCore`) is the portability boundary. It depends only on
-  Node built-ins and sibling core modules — never on `@deepseek-ai/*` — and
-  resolves config from the on-disk file over the host-provided base.
-- `src/index.ts` (`GitEvolutionService`) is the adapter: it registers Cordis
-  tools, the `/evolve` command, the system-prompt section, the skill provider,
-  and the config-file route, then maps every surface onto `GitMemoryCore`.
-
-| Module | Responsibility |
-| --- | --- |
-| `src/git.ts` | Spawns `git`: clone/open, status, branch ops, push/fetch, commit, `git mv`, conflicts, rollback. |
-| `src/memory.ts` + `src/memory-index.ts` | Markdown+YAML-frontmatter scanning, a metadata index cache (HEAD + mtime signature), budgeted recall, timeline. |
-| `src/update.ts` | Versioned update: a new active record plus `supersedes`/`supersededBy`; the old file is never deleted. |
-| `src/forget.ts` | Soft-delete (move to `archiveRoot`) and restore. |
-| `src/privacy.ts` | Sensitive-content detection, sensitivity classification, redaction, export filtering. |
-| `src/skill.ts` | `drafts/` ↔ `enabled/` skill discovery; promote/demote via `git mv`; bundled-skill sync. |
-| `src/strategy.ts` | Slug/sanitize, draft generation from a memory, evolution suggestion, preview. |
-| `src/harness.ts` | `/evolve` command normalization/parsing plus help/usage/safety text. |
-| `src/config.ts` + `src/defaults.ts` | Config-file read/write/merge and the plugin defaults. |
-| `src/invariant.ts` | No-op invariant companion (the source of truth is the configured Git repo). |
-| `src/loopback.ts` + `src/config-route.ts` | Loopback-only `/api/evolve-git/config` route for the config-file editor. |
-| `src/client/` | Browser settings section (`evolve-git` slot) and config-file editor. |
-
-## Data layout
-
-- **Memory** — `<repo>/<memoryRoot>/<kind>/<timestamp>-<slug>-<id>.md`, one
-  Markdown file per record with YAML frontmatter (`kind`, `title`, `branch`,
-  `source`, `tags`, `createdAt`, `id`, `updatedAt`, `status`, `supersedes`,
-  `supersededBy`, `expiresAt`, `sensitivity`) followed by the body.
-- **Skills** — `<repo>/<skillsRoot>/drafts/<name>/SKILL.md` (promotable) and
-  `<repo>/<skillsRoot>/enabled/<name>/SKILL.md` (discoverable). Promotion is a
-  `git mv` between the two, never a copy, so it stays reversible and in history.
-- **Archive** — `<repo>/<archiveRoot>/…` (same relative layout as memory);
-  `evolve_forget` moves records here so they leave recall/timeline but stay
-  recoverable. `archiveRoot` must remain outside `memoryRoot`.
 
 ## Install
 
@@ -110,6 +71,45 @@ For explicit, deterministic control, type `/evolve <subcommand>`:
 ```
 
 The full command reference is under [Harness entry points](#harness-entry-points).
+
+## Architecture
+
+The package is split into a **framework-free core** and a thin **DSH adapter**:
+
+- `src/core.ts` (`GitMemoryCore`) is the portability boundary. It depends only on
+  Node built-ins and sibling core modules — never on `@deepseek-ai/*` — and
+  resolves config from the on-disk file over the host-provided base.
+- `src/index.ts` (`GitEvolutionService`) is the adapter: it registers Cordis
+  tools, the `/evolve` command, the system-prompt section, the skill provider,
+  and the config-file route, then maps every surface onto `GitMemoryCore`.
+
+| Module | Responsibility |
+| --- | --- |
+| `src/git.ts` | Spawns `git`: clone/open, status, branch ops, push/fetch, commit, `git mv`, conflicts, rollback. |
+| `src/memory.ts` + `src/memory-index.ts` | Markdown+YAML-frontmatter scanning, a metadata index cache (HEAD + mtime signature), budgeted recall, timeline. |
+| `src/update.ts` | Versioned update: a new active record plus `supersedes`/`supersededBy`; the old file is never deleted. |
+| `src/forget.ts` | Soft-delete (move to `archiveRoot`) and restore. |
+| `src/privacy.ts` | Sensitive-content detection, sensitivity classification, redaction, export filtering. |
+| `src/skill.ts` | `drafts/` ↔ `enabled/` skill discovery; promote/demote via `git mv`; bundled-skill sync. |
+| `src/strategy.ts` | Slug/sanitize, draft generation from a memory, evolution suggestion, preview. |
+| `src/harness.ts` | `/evolve` command normalization/parsing plus help/usage/safety text. |
+| `src/config.ts` + `src/defaults.ts` | Config-file read/write/merge and the plugin defaults. |
+| `src/invariant.ts` | No-op invariant companion (the source of truth is the configured Git repo). |
+| `src/loopback.ts` + `src/config-route.ts` | Loopback-only `/api/evolve-git/config` route for the config-file editor. |
+| `src/client/` | Browser settings section (`evolve-git` slot) and config-file editor. |
+
+## Data layout
+
+- **Memory** — `<repo>/<memoryRoot>/<kind>/<timestamp>-<slug>-<id>.md`, one
+  Markdown file per record with YAML frontmatter (`kind`, `title`, `branch`,
+  `source`, `tags`, `createdAt`, `id`, `updatedAt`, `status`, `supersedes`,
+  `supersededBy`, `expiresAt`, `sensitivity`) followed by the body.
+- **Skills** — `<repo>/<skillsRoot>/drafts/<name>/SKILL.md` (promotable) and
+  `<repo>/<skillsRoot>/enabled/<name>/SKILL.md` (discoverable). Promotion is a
+  `git mv` between the two, never a copy, so it stays reversible and in history.
+- **Archive** — `<repo>/<archiveRoot>/…` (same relative layout as memory);
+  `evolve_forget` moves records here so they leave recall/timeline but stay
+  recoverable. `archiveRoot` must remain outside `memoryRoot`.
 
 ## Config
 
