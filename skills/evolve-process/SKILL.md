@@ -14,7 +14,7 @@ A memory is worth evolving when it is likely to repeat and the rule is stable. T
 
 ## What a memory is
 
-`evolve_remember` / `/evolve remember` writes `kind` + `title` + `content`, with optional `source` (e.g. a session id) and `tags`, into `<repo>/<memoryRoot>/<kind>/<timestamp>-<slug>.md` with YAML frontmatter and a content body, then commits it. `kind` ∈ `session | skill | warning | persona | note`. Link it to a historical session by putting the session id in `source`; there is no automatic session capture.
+`evolve_remember` / `/evolve remember` writes `kind` + `title` + `content`, with optional `source` (e.g. a session id) and `tags`, into `<repo>/<memoryRoot>/<kind>/<timestamp>-<slug>-<id8>.md` with YAML frontmatter and a content body, then commits it. `kind` ∈ `session | skill | warning | persona | note`. Link it to a historical session by putting the session id in `source`; there is no automatic session capture.
 
 ## Draft
 
@@ -24,7 +24,7 @@ To make a draft SKILL.md from a memory, call `evolve_skill_draft` (or `/evolve s
 - whenToUse: `Use when <first 120 chars of content>`
 - instructions: the memory content
 
-The draft is written under `<repo>/<skillsRoot>/<name>/SKILL.md`. If the draft step is unavailable in your build, author the SKILL.md yourself following that recipe.
+The draft is written under `<repo>/<skillsRoot>/drafts/<name>/SKILL.md`. If the draft step is unavailable in your build, author the SKILL.md yourself following that recipe.
 
 ## Review before promote
 
@@ -32,11 +32,11 @@ Before promoting, check that the draft:
 1. Has a kebab-case `name` and a `description` in frontmatter.
 2. Ends with the directory name matching the frontmatter `name`.
 3. States the contract without narration or change history (one fact, one home).
-4. Contains no secrets; if it does, write a placeholders and note the source outside.
+4. Contains no secrets; if it does, write placeholders and note the source outside.
 
 ## Promote and verify
 
-`/evolve skill list` lists drafts; `/evolve skill promote <name>` (or `evolve_skill_promote`) copies the draft to `~/.dsh/skills/<name>/SKILL.md`. The filesystem provider picks it up, so it then appears in the DSH skill catalog and is callable like any skill. Verify with a `skill` catalog listing.
+`/evolve skill list` lists drafts; `/evolve skill promote <name>` (or `evolve_skill_promote`) moves the draft from `<skillsRoot>/drafts/<name>` to `<skillsRoot>/enabled/<name>` with `git mv` (never a copy). The plugin registers the repo's `<skillsRoot>/enabled/` directory as a DSH skill provider, so promoted skills become callable without being copied into `~/.dsh/skills`. Verify with a `skill` catalog listing.
 
 ## Safety
 
