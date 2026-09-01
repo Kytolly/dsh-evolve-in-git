@@ -4,7 +4,7 @@ import type { MemoryMeta, RecallBudget, RecallFilter, RecallHit } from './memory
 import { type ExportOptions } from './privacy.js';
 import type { UpdatePatch } from './update.js';
 import type { ForgetResult, RestoreResult } from './forget.js';
-import type { DemotedSkill, PromotedSkill, SkillDraftSummary } from './skill.js';
+import type { DemotedSkill, MountedSkill, PromotedSkill, SkillDraftSummary } from './skill.js';
 import type { CommittedArtifact, Config, EvolutionSuggestion, GitStatus, MemoryRecord, MemoryRecordInput, ResolvedConfig, SkillDraft, SkillDraftInput } from './types.js';
 /** A bundled skill materialized or updated in the DSH skills root by syncSkills. */
 export interface SyncedSkill {
@@ -56,6 +56,7 @@ export interface MemoryCore {
     resolve(path: string, strategy: ConflictStrategy): string;
     branchDiff(a: string, b?: string): BranchDiffResult;
     syncSkills(force: boolean): SyncedSkill[];
+    syncedMountedSkills(): MountedSkill[];
 }
 /**
  * The concrete Git-backed MemoryCore. It resolves configuration from the on-disk
@@ -103,4 +104,5 @@ export declare class GitMemoryCore implements MemoryCore {
     resolve(path: string, strategy: ConflictStrategy): string;
     branchDiff(a: string, b?: string): BranchDiffResult;
     syncSkills(force: boolean): SyncedSkill[];
+    syncedMountedSkills(): MountedSkill[];
 }

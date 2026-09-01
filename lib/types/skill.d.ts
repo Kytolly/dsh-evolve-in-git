@@ -21,6 +21,29 @@ export interface SyncedSkill {
 }
 /** Kebab-case skill-name validation (same grammar as the host skill registry). */
 export declare function isSkillName(name: string): boolean;
+export interface MountedSkill {
+    name: string;
+    /** The symlink path under the DSH user skills dir. */
+    link: string;
+    /** The enabled/<name> directory in the memory repo. */
+    target: string;
+    action: 'mounted' | 'relinked';
+}
+/**
+ * Mount an enabled skill into the DSH user skills dir as a symlink so the
+ * filesystem skill provider sees it even when the in-host skill provider could
+ * not be registered. Replaces any stale copy/symlink at the link path.
+ */
+export declare function mountSkill(config: ResolvedConfig, name: string): MountedSkill;
+export interface UnmountedSkill {
+    name: string;
+    link: string;
+    action: 'unmounted' | 'noop' | 'skipped';
+}
+/** Remove the DSH user skills symlink for a demoted skill (only if it points into our enabled root). */
+export declare function unmountSkill(config: ResolvedConfig, name: string): UnmountedSkill;
+/** Mount every enabled skill into the DSH user skills dir; return per-skill results. */
+export declare function syncMountedSkills(config: ResolvedConfig): MountedSkill[];
 /** List promotable skill drafts under <skillsRoot>/drafts. */
 export declare function listSkillDrafts(config: ResolvedConfig): SkillDraftSummary[];
 /** List enabled (discoverable) skills under <skillsRoot>/enabled. */

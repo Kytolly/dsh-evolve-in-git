@@ -6,10 +6,13 @@
  * under <skillsRoot>/enabled/<name>/SKILL.md. Promoting a draft runs
  * git mv drafts/<name> enabled/<name> (never a copy), so the skill stays in Git
  * history and can be demoted or rolled back. The DSH adapter discovers only the
- * enabled/ directory (listEnabledSkills); nothing is copied into ~/.dsh/skills.
+ * enabled/ directory (listEnabledSkills); to bridge the case where that adapter
+ * could not register, enabled skills are also symlinked into ~/.dsh/skills/ so
+ * the filesystem skill provider exposes them (see mountSkill / syncMountedSkills).
  * @module dsh-evolve-in-git/skill
  */
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { commitPaths, gitAdd, gitMove, openRepository } from './git.js'
@@ -57,6 +60,70 @@ function draftsRootOf(config: ResolvedConfig): string {
 
 function enabledRootOf(config: ResolvedConfig): string {
   return join(skillsRootOf(config), 'enabled')
+}
+
+/** DSH user skills directory (~/.dsh/skills, honoring DSH_HOME). */
+function dshSkillsDir(): string {
+  const dshHome = (process.env['DSH_HOME'] || '').trim() || join(homedir(), '.dsh')
+  return join(dshHome, 'skills')
+}
+
+/** True if a path exists (including a dangling symlink). */
+function pathExists(p: string): boolean {
+  try { lstatSync(p); return true } catch { return false }
+}
+
+export interface MountedSkill {
+  name: string
+  /** The symlink path under the DSH user skills dir. */
+  link: string
+  /** The enabled/<name> directory in the memory repo. */
+  target: string
+  action: 'mounted' | 'relinked'
+}
+
+/**
+ * Mount an enabled skill into the DSH user skills dir as a symlink so the
+ * filesystem skill provider sees it even when the in-host skill provider could
+ * not be registered. Replaces any stale copy/symlink at the link path.
+ */
+export function mountSkill(config: ResolvedConfig, name: string): MountedSkill {
+  const link = join(dshSkillsDir(), name)
+  const target = join(enabledRootOf(config), name)
+  mkdirSync(dirname(link), { recursive: true })
+  let action: 'mounted' | 'relinked' = 'mounted'
+  if (pathExists(link)) {
+    rmSync(link, { recursive: true, force: true })
+    action = 'relinked'
+  }
+  symlinkSync(target, link, 'dir')
+  return { name, link, target, action }
+}
+
+export interface UnmountedSkill {
+  name: string
+  link: string
+  action: 'unmounted' | 'noop' | 'skipped'
+}
+
+/** Remove the DSH user skills symlink for a demoted skill (only if it points into our enabled root). */
+export function unmountSkill(config: ResolvedConfig, name: string): UnmountedSkill {
+  const link = join(dshSkillsDir(), name)
+  if (!pathExists(link)) return { name, link, action: 'noop' }
+  let ours = false
+  try {
+    const st = lstatSync(link)
+    const real = readlinkSync(link)
+    ours = st.isSymbolicLink() && real.includes(enabledRootOf(config))
+  } catch { ours = false }
+  if (!ours) return { name, link, action: 'skipped' }
+  rmSync(link, { recursive: true, force: true })
+  return { name, link, action: 'unmounted' }
+}
+
+/** Mount every enabled skill into the DSH user skills dir; return per-skill results. */
+export function syncMountedSkills(config: ResolvedConfig): MountedSkill[] {
+  return listEnabledSkills(config).map((s) => mountSkill(config, s.name))
 }
 
 /** Repo-relative path (forward slashes) for git mv. */
@@ -138,6 +205,9 @@ function moveSkill(config: ResolvedConfig, from: 'drafts' | 'enabled', to: 'draf
   if (config.autoCommit) {
     commitPaths(repoPath, [relMovePath(config, to, name)], 'skill(' + (to === 'enabled' ? 'promote' : 'demote') + '): ' + name)
   }
+  // Expose promoted skills to the DSH filesystem provider and unlink demoted ones.
+  if (to === 'enabled') { try { mountSkill(config, name) } catch { /* best-effort */ } }
+  else if (to === 'drafts') { try { unmountSkill(config, name) } catch { /* best-effort */ } }
   return { name: fm.name, description: fm.description, path: join(toAbs, 'SKILL.md'), targetPath: join(toAbs, 'SKILL.md') }
 }
 

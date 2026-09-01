@@ -52,8 +52,8 @@ import { updateMemory } from './update.js'
 import type { UpdatePatch } from './update.js'
 import { forgetMemory, restoreMemory } from './forget.js'
 import type { ForgetResult, RestoreResult } from './forget.js'
-import { demoteSkillDraft, listEnabledSkills, listSkillDrafts, promoteSkillDraft, syncBundledSkills } from './skill.js'
-import type { DemotedSkill, PromotedSkill, SkillDraftSummary } from './skill.js'
+import { demoteSkillDraft, listEnabledSkills, listSkillDrafts, promoteSkillDraft, syncBundledSkills, syncMountedSkills } from './skill.js'
+import type { DemotedSkill, MountedSkill, PromotedSkill, SkillDraftSummary } from './skill.js'
 import { draftSkillFromRecord, renderSkillDraft, suggestEvolution } from './strategy.js'
 import type {
   CommittedArtifact,
@@ -144,6 +144,7 @@ export interface MemoryCore {
   resolve(path: string, strategy: ConflictStrategy): string
   branchDiff(a: string, b?: string): BranchDiffResult
   syncSkills(force: boolean): SyncedSkill[]
+  syncedMountedSkills(): MountedSkill[]
 }
 
 /**
@@ -158,6 +159,9 @@ export class GitMemoryCore implements MemoryCore {
   constructor(config: Config) {
     this.baseConfig = config
     this.config = resolveConfig(mergeConfig(config, readConfigFile()) as Config)
+    // Best-effort: mount enabled skills into the DSH user skills dir so the
+    // filesystem provider exposes them even if the in-host provider is absent.
+    try { syncMountedSkills(this.config) } catch { /* no repo / not writable */ }
   }
 
   configFilePath(): string {
@@ -314,5 +318,9 @@ export class GitMemoryCore implements MemoryCore {
 
   syncSkills(force: boolean): SyncedSkill[] {
     return syncBundledSkills(this.config, force)
+  }
+
+  syncedMountedSkills(): MountedSkill[] {
+    return syncMountedSkills(this.config)
   }
 }
