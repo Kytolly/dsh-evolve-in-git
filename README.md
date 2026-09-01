@@ -80,17 +80,6 @@ The package is split into a **framework-free core** and a thin **DSH adapter**:
 The bundle inserts one `dsh-evolve-in-git` row with the plugin defaults.
 Later profile patches can override `repoPath`, `repoUrl`, `auth`, and the storage roots.
 
-> **Windows local install.** A `file:` source containing spaces (`D:\Deepseek Harness\…`)
-is split by the CLI argument parser, so use a space-less path (a junction or short path):
->
-> ```sh
-> dsh plugin --profile web add file:C:/Users/13928/.dsh/evolve-in-git
-> ```
->
-> The built `lib/` (including the browser `lib/client.js`) is committed, so the
-> `github:` route works as-is. Rebuild locally with `pnpm build` after source
-> changes, then commit the artifacts.
-
 ## Usage
 
 ### Natural language
