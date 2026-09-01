@@ -15,10 +15,10 @@
 ## 目录
 
 - [简介](#简介)
-- [架构](#架构)
-- [数据布局](#数据布局)
 - [快速安装](#快速安装)
 - [使用方式](#使用方式)
+- [架构](#架构)
+- [数据布局](#数据布局)
 - [配置](#配置)
 - [Harness 入口](#harness-入口)
 - [浏览器端](#浏览器端)
@@ -30,45 +30,6 @@
 
 这个插件把用户指定或预配置的 Git 仓库当作记忆存储：把会话笔记、分支记录、
 可复用的技能草稿写进仓库，再作为普通 Git 历史提交。
-
-## 架构
-
-代码拆成 **无框架 core** 和薄薄的 **DSH adapter** 两层：
-
-- `src/core.ts`（`GitMemoryCore`）是可移植边界：只依赖 Node 内置模块与同级
-  core 模块，不依赖任何 `@deepseek-ai/*` 包；它在宿主提供的配置之上叠加磁盘
-  配置文件来解析最终配置。
-- `src/index.ts`（`GitEvolutionService`）是 adapter：注册 Cordis 工具、
-  `/evolve` 命令、system-prompt 段落、技能 provider 和配置路由，然后把所有
-  入口映射到 `GitMemoryCore`。
-
-| 模块 | 职责 |
-| --- | --- |
-| `src/git.ts` | 调用 `git`：clone/open、status、分支操作、push/fetch、commit、`git mv`、冲突、回滚。 |
-| `src/memory.ts` + `src/memory-index.ts` | Markdown + YAML frontmatter 扫描；元数据索引缓存（HEAD + mtime 签名）；带预算的召回；时间线。 |
-| `src/update.ts` | 版本化更新：新 active 记录 + `supersedes`/`supersededBy`；旧文件永不删除。 |
-| `src/forget.ts` | 软删除（移到 `archiveRoot`）与恢复。 |
-| `src/privacy.ts` | 敏感内容检测、敏感级分类、脱敏、导出过滤。 |
-| `src/skill.ts` | `drafts/` ↔ `enabled/` 技能发现；用 `git mv` 提升/降级；内置技能同步。 |
-| `src/strategy.ts` | slug/段名清洗、由记忆生成草稿、演化建议、预览。 |
-| `src/harness.ts` | `/evolve` 命令归一化/解析，以及 help/usage/safety 文案。 |
-| `src/config.ts` + `src/defaults.ts` | 配置文件读写/合并与插件默认值。 |
-| `src/invariant.ts` | 无运行时不变量（事实源是已配置的 Git 仓库）。 |
-| `src/loopback.ts` + `src/config-route.ts` | 仅供 loopback 访问的 `/api/evolve-git/config` 路由，给配置文件编辑器用。 |
-| `src/client/` | 浏览器设置分区（`evolve-git` slot）与配置文件编辑器。 |
-
-## 数据布局
-
-- **记忆**：`<repo>/<memoryRoot>/<kind>/<timestamp>-<slug>-<id>.md`，每条记录一个
-  Markdown 文件，YAML frontmatter（`kind`、`title`、`branch`、`source`、
-  `tags`、`createdAt`、`id`、`updatedAt`、`status`、`supersedes`、
-  `supersededBy`、`expiresAt`、`sensitivity`）后接正文。
-- **技能**：`<repo>/<skillsRoot>/drafts/<name>/SKILL.md`（可提升）与
-  `<repo>/<skillsRoot>/enabled/<name>/SKILL.md`（可被发现）。提升是两者之间的
-  `git mv`，不是复制，因此可逆且留在历史里。
-- **归档**：`<repo>/<archiveRoot>/…`（与记忆相同的相对布局）；`evolve_forget`
-  把记录移到这里，使其离开召回/时间线但仍可恢复。`archiveRoot` 必须保持在
-  `memoryRoot` 之外。
 
 ## 快速安装
 
@@ -118,6 +79,46 @@ dsh --profile web                 # 启动 profile；加载后模型能看到 ev
 ```
 
 完整命令参考见 [Harness 入口](#harness-入口)。
+
+## 架构
+
+代码拆成 **无框架 core** 和薄薄的 **DSH adapter** 两层：
+
+- `src/core.ts`（`GitMemoryCore`）是可移植边界：只依赖 Node 内置模块与同级
+  core 模块，不依赖任何 `@deepseek-ai/*` 包；它在宿主提供的配置之上叠加磁盘
+  配置文件来解析最终配置。
+- `src/index.ts`（`GitEvolutionService`）是 adapter：注册 Cordis 工具、
+  `/evolve` 命令、system-prompt 段落、技能 provider 和配置路由，然后把所有
+  入口映射到 `GitMemoryCore`。
+
+| 模块 | 职责 |
+| --- | --- |
+| `src/git.ts` | 调用 `git`：clone/open、status、分支操作、push/fetch、commit、`git mv`、冲突、回滚。 |
+| `src/memory.ts` + `src/memory-index.ts` | Markdown + YAML frontmatter 扫描；元数据索引缓存（HEAD + mtime 签名）；带预算的召回；时间线。 |
+| `src/update.ts` | 版本化更新：新 active 记录 + `supersedes`/`supersededBy`；旧文件永不删除。 |
+| `src/forget.ts` | 软删除（移到 `archiveRoot`）与恢复。 |
+| `src/privacy.ts` | 敏感内容检测、敏感级分类、脱敏、导出过滤。 |
+| `src/skill.ts` | `drafts/` ↔ `enabled/` 技能发现；用 `git mv` 提升/降级；内置技能同步。 |
+| `src/strategy.ts` | slug/段名清洗、由记忆生成草稿、演化建议、预览。 |
+| `src/harness.ts` | `/evolve` 命令归一化/解析，以及 help/usage/safety 文案。 |
+| `src/config.ts` + `src/defaults.ts` | 配置文件读写/合并与插件默认值。 |
+| `src/invariant.ts` | 无运行时不变量（事实源是已配置的 Git 仓库）。 |
+| `src/loopback.ts` + `src/config-route.ts` | 仅供 loopback 访问的 `/api/evolve-git/config` 路由，给配置文件编辑器用。 |
+| `src/client/` | 浏览器设置分区（`evolve-git` slot）与配置文件编辑器。 |
+
+## 数据布局
+
+- **记忆**：`<repo>/<memoryRoot>/<kind>/<timestamp>-<slug>-<id>.md`，每条记录一个
+  Markdown 文件，YAML frontmatter（`kind`、`title`、`branch`、`source`、
+  `tags`、`createdAt`、`id`、`updatedAt`、`status`、`supersedes`、
+  `supersededBy`、`expiresAt`、`sensitivity`）后接正文。
+- **技能**：`<repo>/<skillsRoot>/drafts/<name>/SKILL.md`（可提升）与
+  `<repo>/<skillsRoot>/enabled/<name>/SKILL.md`（可被发现）。提升是两者之间的
+  `git mv`，不是复制，因此可逆且留在历史里。
+- **归档**：`<repo>/<archiveRoot>/…`（与记忆相同的相对布局）；`evolve_forget`
+  把记录移到这里，使其离开召回/时间线但仍可恢复。`archiveRoot` 必须保持在
+  `memoryRoot` 之外。
+
 
 ## 配置
 
