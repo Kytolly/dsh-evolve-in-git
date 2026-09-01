@@ -88,16 +88,6 @@ dsh --profile web --dump-config   # 应能看到 evolve-git 这一行
 dsh --profile web                 # 启动 profile；加载后模型能看到 evolve_* 工具
 ```
 
-> **Windows 本地安装。** 带空格的 `file:` 路径（如 `D:\Deepseek Harness\…`）
-> 会被 CLI 参数解析器拆开，所以请使用不含空格的路径（junction 或短路径）：
->
-> ```sh
-> dsh plugin --profile web add file:C:/Users/13928/.dsh/evolve-in-git
-> ```
->
-> 已构建的 `lib/`（含浏览器 `lib/client.js`）已提交进仓库，因此 `github:`
-> 方式可直接使用；改动源码后请本地 `pnpm build` 并提交构建产物。
-
 ## 使用方式
 
 ### 自然语言使用
